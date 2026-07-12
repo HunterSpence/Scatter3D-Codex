@@ -74,8 +74,9 @@ COPY examples ./examples
 COPY docs ./docs
 COPY validation ./validation
 
-RUN useradd --create-home --uid 1000 scatter3d \
-    && chown -R scatter3d:scatter3d /opt/scatter3d
-USER scatter3d
+# The pinned DOLFINx base already provides an unprivileged UID/GID 1000.
+# Reuse it instead of assuming the corresponding account name is absent.
+RUN chown -R 1000:1000 /opt/scatter3d
+USER 1000:1000
 
 CMD ["python3", "-m", "scatter3d.cli", "--help"]
