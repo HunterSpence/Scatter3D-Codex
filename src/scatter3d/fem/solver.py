@@ -190,7 +190,7 @@ class MaxwellSweepSolver:
             del options[key]
         if hasattr(ksp, "setErrorIfNotConverged"):
             ksp.setErrorIfNotConverged(config.error_if_not_converged)
-        ksp.setReusePreconditioner(True)
+        pc.setReusePreconditioner(True)
         ksp.setConvergenceHistory(config.maximum_iterations + 1, reset=True)
         return ksp, prefix, installed
 

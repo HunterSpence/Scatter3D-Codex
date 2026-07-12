@@ -67,7 +67,7 @@ class VolumeTagContract:
 class BoundaryTagContract:
     """Disjoint boundary groups for PEC walls, ports, and diagnostics."""
 
-    ports: Mapping[str, int]
+    ports: Mapping[str, int] = field(default_factory=dict)
     pec_tags: tuple[int, ...] = ()
     observation_tags: tuple[int, ...] = ()
 

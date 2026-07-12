@@ -230,7 +230,9 @@ jobs:
         run: |
           docker run --rm --ipc=host scatter3d-codex:ci bash -euc '
             mpirun -n 2 sh -euc '\''
-              python3 -m pytest -p no:cacheprovider -W error -m mpi -ra --junitxml=/tmp/mpi-${OMPI_COMM_WORLD_RANK}.xml
+              rank="${PMI_RANK:-${OMPI_COMM_WORLD_RANK:-}}"
+              test -n "${rank}"
+              python3 -m pytest -p no:cacheprovider -W error -m mpi -ra --junitxml="/tmp/mpi-${rank}.xml"
             '\''
             python3 - <<"PY"
           import glob
