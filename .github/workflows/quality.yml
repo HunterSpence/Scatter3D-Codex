@@ -278,8 +278,10 @@ jobs:
           cd "${RUNNER_TEMP}/scatter3d-heavy"
           unreadable="$(find . -maxdepth 1 -type f ! -perm -004 -print)"
           test -z "${unreadable}"
+          manifest="${RUNNER_TEMP}/scatter3d-heavy-SHA256SUMS.tmp"
           find . -maxdepth 1 -type f ! -name SHA256SUMS -printf '%f\0' \
-            | sort -z | xargs -0 -r sha256sum > SHA256SUMS
+            | sort -z | xargs -0 -r sha256sum > "${manifest}"
+          mv "${manifest}" SHA256SUMS
       - name: Archive heavy verification evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -377,8 +379,10 @@ jobs:
           cd "${RUNNER_TEMP}/scatter3d-mpi"
           unreadable="$(find . -maxdepth 1 -type f ! -perm -004 -print)"
           test -z "${unreadable}"
+          manifest="${RUNNER_TEMP}/scatter3d-mpi-SHA256SUMS.tmp"
           find . -maxdepth 1 -type f ! -name SHA256SUMS -printf '%f\0' \
-            | sort -z | xargs -0 -r sha256sum > SHA256SUMS
+            | sort -z | xargs -0 -r sha256sum > "${manifest}"
+          mv "${manifest}" SHA256SUMS
       - name: Archive MPI verification evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
