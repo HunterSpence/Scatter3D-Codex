@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
+from itertools import pairwise
 from time import perf_counter
-from typing import Any, Iterable, Sequence
+from typing import Any
 
 import numpy as np
 
@@ -22,7 +24,7 @@ from .diagnostics import (
     process_peak_rss_bytes,
 )
 from .forms import MaxwellForms, build_maxwell_forms
-from .ports import PortExcitation
+from .ports import MatchedTEMPortExcitation, PortDefinition
 from .tags import MeshTagContract, validate_mesh_tags
 
 
@@ -74,7 +76,7 @@ def _strict_frequencies(values: Iterable[float]) -> tuple[float, ...]:
     frequencies = tuple(float(value) for value in values)
     if not frequencies or any(not np.isfinite(value) or value <= 0 for value in frequencies):
         raise ValueError("frequencies_hz must contain finite positive values")
-    if any(right <= left for left, right in zip(frequencies, frequencies[1:])):
+    if any(right <= left for left, right in pairwise(frequencies)):
         raise ValueError("frequencies_hz must be strictly increasing")
     return frequencies
 
@@ -100,9 +102,10 @@ def _rss_metrics(comm: Any) -> tuple[int | None, int | None]:
     from mpi4py import MPI
 
     local = process_peak_rss_bytes()
-    if local is None:
-        available = comm.allreduce(0, op=MPI.SUM)
-        return (None, None) if available == 0 else (None, None)
+    available = int(comm.allreduce(int(local is not None), op=MPI.SUM))
+    if available != comm.size:
+        return None, None
+    assert local is not None
     return (
         int(comm.allreduce(local, op=MPI.MAX)),
         int(comm.allreduce(local, op=MPI.SUM)),
@@ -132,9 +135,10 @@ class MaxwellSweepSolver:
         problem_config: MaxwellProblemConfig,
         *,
         pml_config: PMLConfig | None = None,
+        matched_ports: Sequence[PortDefinition] | None = None,
         solver_config: LinearSolverConfig | None = None,
         initial_frequency_hz: float = 1.0e9,
-    ) -> "MaxwellSweepSolver":
+    ) -> MaxwellSweepSolver:
         validate_mesh_tags(mesh, cell_tags, facet_tags, tag_contract)
         forms = build_maxwell_forms(
             mesh,
@@ -144,6 +148,7 @@ class MaxwellSweepSolver:
             materials,
             problem_config,
             pml_config,
+            matched_ports=matched_ports,
             initial_frequency_hz=initial_frequency_hz,
         )
         return cls(forms, solver_config)
@@ -192,7 +197,7 @@ class MaxwellSweepSolver:
     def solve(
         self,
         frequencies_hz: Iterable[float],
-        ports: Sequence[PortExcitation],
+        ports: Sequence[MatchedTEMPortExcitation],
         *,
         retain_solutions: bool = True,
     ) -> SweepResult:
@@ -200,7 +205,6 @@ class MaxwellSweepSolver:
 
         from dolfinx import fem
         from dolfinx.fem import petsc as fem_petsc
-        from mpi4py import MPI
         from petsc4py import PETSc
 
         frequencies = _strict_frequencies(frequencies_hz)
@@ -210,9 +214,9 @@ class MaxwellSweepSolver:
         if len(set(port_names)) != len(port_names):
             raise ValueError("port excitation names must be unique")
         for port in ports:
-            if port.surface_current.function_space is not self.function_space:
+            if port.mode.field.function_space is not self.function_space:
                 raise ValueError(
-                    f"port {port.definition.name!r} current must use solver.function_space"
+                    f"port {port.definition.name!r} mode must use solver.function_space"
                 )
 
         comm = self.forms.mesh.comm
@@ -332,7 +336,7 @@ class MaxwellSweepSolver:
     def solve_material_pair(
         self,
         frequencies_hz: Iterable[float],
-        ports: Sequence[PortExcitation],
+        ports: Sequence[MatchedTEMPortExcitation],
         materials: ExperimentMaterials,
         *,
         retain_solutions: bool = True,

@@ -165,16 +165,25 @@ class RepeatNoiseEstimate:
 
 def _repeat_stack(
     repeats: np.ndarray | Sequence[ScatteringDataset], *, name: str
-) -> tuple[np.ndarray, tuple[int, int, int, int]]:
+) -> tuple[np.ndarray, tuple[int, int, int, int], ScatteringDataset | None]:
     if isinstance(repeats, np.ndarray):
-        stack = np.asarray(repeats, dtype=np.complex128)
+        raw = np.asarray(repeats)
+        if not np.issubdtype(raw.dtype, np.complexfloating):
+            raise ValueError(f"{name} must use a complex dtype")
+        stack = np.asarray(raw, dtype=np.complex128)
         if stack.ndim != 5:
             raise ValueError(
                 f"{name} must have shape [repeat, angle, frequency, receiver, source]"
             )
+        if any(size <= 0 for size in stack.shape):
+            raise ValueError(f"{name} axes must all be non-empty")
         if stack.shape[3] != stack.shape[4]:
             raise ValueError(f"{name} receiver/source port counts differ")
-        return stack, tuple(int(n) for n in stack.shape[1:])  # type: ignore[return-value]
+        return (
+            stack,
+            tuple(int(n) for n in stack.shape[1:]),  # type: ignore[arg-type]
+            None,
+        )
 
     datasets = tuple(repeats)
     if not datasets:
@@ -184,7 +193,7 @@ def _repeat_stack(
     first = datasets[0]
     for index, item in enumerate(datasets[1:], start=1):
         assert_compatible(first, item, first_name=f"{name}[0]", second_name=f"{name}[{index}]")
-    return np.stack([item.s for item in datasets]), first.shape
+    return np.stack([item.s for item in datasets]), first.shape, first
 
 
 def estimate_repeat_differential_noise(
@@ -201,10 +210,24 @@ def estimate_repeat_differential_noise(
     variance is always computed; dense covariance is opt-in and size-guarded.
     """
 
-    reference, reference_shape = _repeat_stack(reference_repeats, name="reference_repeats")
-    dut, dut_shape = _repeat_stack(dut_repeats, name="dut_repeats")
+    reference, reference_shape, reference_coordinates = _repeat_stack(
+        reference_repeats, name="reference_repeats"
+    )
+    dut, dut_shape, dut_coordinates = _repeat_stack(dut_repeats, name="dut_repeats")
     if reference.shape != dut.shape or reference_shape != dut_shape:
         raise ValueError("reference and DUT repeat stacks must have identical shapes")
+    if (reference_coordinates is None) != (dut_coordinates is None):
+        raise TypeError(
+            "reference and DUT repeats must both be raw arrays or both be "
+            "coordinate-bearing ScatteringDataset sequences"
+        )
+    if reference_coordinates is not None and dut_coordinates is not None:
+        assert_compatible(
+            reference_coordinates,
+            dut_coordinates,
+            first_name="reference_repeats[0]",
+            second_name="dut_repeats[0]",
+        )
     repeat_count = reference.shape[0]
     if repeat_count < 2:
         raise ValueError("at least two paired repeats are required")
@@ -322,7 +345,7 @@ def tsvd_solve(
     method: str = "gcv",
     rank: int | None = None,
     noise_norm: float | None = None,
-    energy_fraction: float = 0.999,
+    energy_fraction: float | None = None,
     rcond: float | None = None,
 ) -> TSVDSolution:
     """Solve a complex linear inverse problem with transparent TSVD selection.
@@ -352,6 +375,10 @@ def tsvd_solve(
         raise ValueError("rcond must be finite and non-negative")
     if method != "fixed" and rank is not None:
         raise ValueError("rank is only valid when method='fixed'")
+    if method != "discrepancy" and noise_norm is not None:
+        raise ValueError("noise_norm is only valid when method='discrepancy'")
+    if method != "energy" and energy_fraction is not None:
+        raise ValueError("energy_fraction is only valid when method='energy'")
 
     dtype = np.result_type(a.dtype, b.dtype, np.complex128)
     a = np.asarray(a, dtype=dtype)
@@ -370,8 +397,11 @@ def tsvd_solve(
         raise np.linalg.LinAlgError("no singular values exceed the requested threshold")
 
     beta = u.conj().T @ b
-    projected_energy = float(np.sum(np.abs(beta) ** 2))
-    outside_energy = max(0.0, float(np.vdot(b, b).real) - projected_energy)
+    # Form the component outside the computed left singular subspace directly.
+    # Subtracting projected energy from ||b||^2 catastrophically cancels for a
+    # full-row-rank matrix and can manufacture a large false residual floor.
+    outside_residual = b - u @ beta
+    outside_energy = float(np.vdot(outside_residual, outside_residual).real)
     ranks = np.arange(1, available + 1, dtype=np.int64)
     residual_squared = np.asarray(
         [outside_energy + float(np.sum(np.abs(beta[k:]) ** 2)) for k in ranks],
@@ -389,6 +419,8 @@ def tsvd_solve(
             raise ValueError(f"rank must lie between 1 and {available}")
         criterion_values = residual_curve
     elif method == "energy":
+        if energy_fraction is None:
+            energy_fraction = 0.999
         if not np.isfinite(energy_fraction) or not 0.0 < energy_fraction <= 1.0:
             raise ValueError("energy_fraction must lie in (0, 1]")
         energy_curve = np.cumsum(singular_values[:available] ** 2)

@@ -45,7 +45,10 @@ NIST's multiport work demonstrates that calibration and measurement errors are
 correlated and should be propagated rather than treated as independent scalar
 noise ([Jargon, Williams, and Sanders, 2019](https://www.nist.gov/publications/three-port-vector-network-analyzer-calibrations-using-nist-microwave-uncertainty)).
 Full covariance is useful only when the number and diversity of repeats support
-a stable estimate; otherwise use a registered diagonal model.
+a stable estimate; otherwise use a registered diagonal model. The current dense
+covariance API is opt-in, limited by an explicit observation-count guard, and
+rejects `repeat_count <= observation_count` because the sample covariance would
+be rank-deficient. Production whitening remains the O(N) diagonal path.
 
 ## Acceptance quantities
 
@@ -61,7 +64,8 @@ rho = d_target / sigma_combined
 
 `M` is the number of retained complex samples. Also compute these quantities per
 frequency and channel; one large reflection coefficient must not mask unusable
-transmission rows.
+transmission rows. `scatter3d diagnose` emits one record per
+frequency/receiver/source channel as well as the aggregate values.
 
 The project pre-registers `rho >= 5` for the deliberately strong known target as
 a practical proceed gate. This is a project engineering threshold, not a
@@ -184,11 +188,19 @@ independently.
    enough independent repeats for a stable, reviewed estimator.
 3. Whiten `A` and `b` with the identical transform.
 4. Use discrepancy selection when the whitened noise norm is known; otherwise
-   use GCV. Record alternatives as sensitivity analysis, not a beauty contest.
+   use GCV. If no explicit discrepancy target is supplied after paired-repeat
+   whitening, the CLI uses `sqrt(rows)` only as the expected RMS scale under
+   `E|z_i|^2=1`. It is not a confidence bound. An unmet target is `FAILED` and
+   returns nonzero unless the operator explicitly records
+   `--allow-unmet-discrepancy`; the result remains `FAILED` under that override.
+   Record alternatives as sensitivity analysis, not a beauty contest.
 5. Reconstruct the motion null, twin-POM null, empty fixture, and known target
    with the exact same pipeline.
-6. Report residual, rank, singular spectrum, image peak/location, volume-weighted
-   metrics for known truth, and all negative controls.
+6. Archive the reconstruction NPZ with the full compact singular spectrum,
+   numerical-rank threshold, complete selector rank/criterion curve, status,
+   whitening/floor parameters, input hashes, and selected rows. Report residual,
+   rank, image peak/location, volume-weighted metrics for known truth, and all
+   negative controls.
 7. Blind the intended target label/location during final parameter selection when
    feasible.
 
@@ -213,3 +225,17 @@ Archive:
 
 Until that package exists and passes its registered gates, describe the project
 as a tested imaging framework—not as a successful real POM/PLA imager.
+
+## FEM port truth boundary
+
+The historical FEM surface-current excitation is only an uncalibrated weak-form
+load. It has no matched termination, accepted-power normalization, circuit
+reference, incident/outgoing decomposition, or S-parameter meaning and must not
+be used to claim agreement with a VNA port.
+
+A matched single-mode TEM boundary and electric-mode power normalization are in
+progress. Until their digest-pinned heavy tests, independent transmission-line
+oracle, incident/outgoing modal extraction, reciprocity, and accepted-power
+checks pass, label that path **NOT RUN** or **FAILED** as appropriate—not a
+calibrated physical port. Real POM/PLA VNA reconstruction, the 3,000,000-complex-
+DoF solve, and the same-problem 50% memory target remain **NOT RUN**.

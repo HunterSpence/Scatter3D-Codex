@@ -5,6 +5,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+import scatter3d.measurement as measurement_module
 from scatter3d.measurement import (
     CSV_COLUMNS,
     ScatteringDataset,
@@ -43,6 +44,13 @@ def test_dataset_contract_and_vector_order_are_explicit() -> None:
             frequencies_hz=dataset.frequencies_hz[::-1],
             angles_deg=dataset.angles_deg,
             port_labels=dataset.port_labels,
+        )
+    with pytest.raises(ValueError, match="whitespace"):
+        ScatteringDataset(
+            dataset.s,
+            frequencies_hz=dataset.frequencies_hz,
+            angles_deg=dataset.angles_deg,
+            port_labels=("P1", " P2"),
         )
 
 
@@ -89,6 +97,38 @@ def test_csv_rejects_schema_and_row_order_ambiguity(tmp_path: Path) -> None:
     )
     with pytest.raises(ValueError, match="unexpected CSV schema"):
         read_scattering_csv(bad_header)
+
+
+def test_csv_rejects_noncanonical_labels_and_huge_sparse_indices(tmp_path: Path) -> None:
+    path = tmp_path / "measurement.csv"
+    write_scattering_csv(path, make_dataset(angles=1, frequencies=1))
+    lines = path.read_text(encoding="utf-8").splitlines()
+
+    whitespace = list(lines)
+    fields = whitespace[1].split(",")
+    fields[5] = " P1"
+    whitespace[1] = ",".join(fields)
+    path.write_text("\n".join(whitespace) + "\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="whitespace"):
+        read_scattering_csv(path)
+
+    huge_index = list(lines)
+    fields = huge_index[1].split(",")
+    fields[0] = "1000000000"
+    huge_index[1] = ",".join(fields)
+    path.write_text("\n".join(huge_index) + "\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="contiguous"):
+        read_scattering_csv(path)
+
+
+def test_csv_rejects_a_file_that_changes_during_parse(tmp_path: Path, monkeypatch) -> None:
+    path = tmp_path / "measurement.csv"
+    write_scattering_csv(path, make_dataset(angles=1, frequencies=1))
+    digests = iter(("0" * 64, "1" * 64))
+    monkeypatch.setattr(measurement_module, "sha256_file", lambda _path: next(digests))
+
+    with pytest.raises(OSError, match="changed while"):
+        read_scattering_csv(path)
 
 
 def test_same_index_differential_is_default_and_alignment_is_off() -> None:

@@ -1,8 +1,14 @@
 from __future__ import annotations
 
+import json
 from dataclasses import replace
 
-from scatter3d.fem.checkpoints import CheckpointIdentity, checkpoint_fingerprint
+from scatter3d.fem.checkpoints import (
+    CheckpointIdentity,
+    checkpoint_fingerprint,
+    verify_manifest,
+    write_manifest,
+)
 
 
 def _identity() -> CheckpointIdentity:
@@ -30,3 +36,16 @@ def test_checkpoint_identity_changes_with_dut_material() -> None:
     identity = _identity()
     changed = replace(identity, material_model={"reference": {}, "dut": {"epsr": 2.2}})
     assert checkpoint_fingerprint(identity) != checkpoint_fingerprint(changed)
+
+
+def test_checkpoint_manifest_rejects_payload_tamper(tmp_path) -> None:
+    path = tmp_path / "checkpoint.json"
+    identity = _identity()
+    write_manifest(path, identity)
+    assert verify_manifest(path, identity)
+    assert not list(tmp_path.glob("*.tmp"))
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["mpi_size"] = 999
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    assert not verify_manifest(path, identity)

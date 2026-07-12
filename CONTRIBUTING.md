@@ -17,12 +17,15 @@ python -m ruff check .
 The DOLFINx/PETSc stack is tested in the pinned container:
 
 ```bash
-docker build -f docker/Dockerfile -t scatter3d-codex:test .
+docker build --pull=false -f docker/Dockerfile -t scatter3d-codex:test .
 docker run --rm scatter3d-codex:test \
-  python -m pytest -m heavy -ra
+  python3 -m pytest -p no:cacheprovider -W error -m "heavy and not mpi" -ra
 docker run --rm --ipc=host scatter3d-codex:test \
-  mpirun --allow-run-as-root -n 2 python -m pytest -m mpi -ra
+  mpirun -n 2 python3 -m pytest -p no:cacheprovider -W error -m mpi -ra
 ```
+
+Run `examples/run_container_verification.sh` for the full helper that also
+rejects zero-test and skipped-test heavy/MPI reports.
 
 ## Pull-request requirements
 

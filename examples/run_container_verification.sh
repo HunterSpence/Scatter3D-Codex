@@ -1,12 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+repo_root=$(cd -- "${script_dir}/.." && pwd)
+cd "${repo_root}"
+
 image="${1:-scatter3d-codex:verify}"
 
 docker build --pull=false -f docker/Dockerfile -t "${image}" .
 
 heavy_command=$(cat <<'BASH'
-python3 -m pytest -W error -m "heavy and not mpi" -ra --junitxml=/tmp/heavy.xml
+python3 -m pytest -p no:cacheprovider -W error -m "heavy and not mpi" -ra --junitxml=/tmp/heavy.xml
 python3 - <<'PY'
 import xml.etree.ElementTree as ET
 
@@ -24,7 +28,7 @@ docker run --rm "${image}" bash -euc "${heavy_command}"
 
 mpi_command=$(cat <<'BASH'
 mpirun -n 2 sh -euc '
-  python3 -m pytest -W error -m mpi -ra --junitxml=/tmp/mpi-${OMPI_COMM_WORLD_RANK}.xml
+  python3 -m pytest -p no:cacheprovider -W error -m mpi -ra --junitxml=/tmp/mpi-${OMPI_COMM_WORLD_RANK}.xml
 '
 python3 - <<'PY'
 import glob

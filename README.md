@@ -1,6 +1,5 @@
 # Scatter3D-Codex
 
-[![quality](https://github.com/HunterSpence/Scatter3D-Codex/actions/workflows/quality.yml/badge.svg)](https://github.com/HunterSpence/Scatter3D-Codex/actions/workflows/quality.yml)
 [![license](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
 Scatter3D-Codex is a clean-room, verification-first framework for differential
@@ -16,12 +15,13 @@ from that repository was copied.
 
 | Capability | Evidence required by this repository | Claim |
 |---|---|---|
-| Data order, hashes, reference/DUT subtraction | Pure unit and end-to-end synthetic tests | Implemented and testable |
-| Repeat-floor diagnostics and complex TSVD | Pure deterministic tests | Implemented and testable |
-| Maxwell forms, PML, port normalization, checkpoints | Digest-pinned complex DOLFINx heavy tests | Must pass the heavy CI job |
-| Two-rank operation | Dedicated MPI tests with zero permitted skips | Must pass the MPI CI job |
-| Real POM/PLA object imaging | Archived VNA repeats, nulls, known target, materials, and acceptance report | **Not yet demonstrated** |
-| Production-scale convergence | Registered mesh/PML/quadrature sweep on the actual geometry | **Not yet demonstrated** |
+| Data order, hashes, reference/DUT subtraction | Pure unit and end-to-end synthetic tests on the exact revision | Implemented; consult the exact-commit CI run for test status |
+| Repeat-floor diagnostics and complex TSVD | Pure deterministic tests on the exact revision | Implemented; consult the exact-commit CI run for test status |
+| Matched TEM boundary, mode normalization, and extraction | Digest-pinned complex DOLFINx tests plus an independent calibrated-port benchmark | **Work in progress; not yet a validated physical/S-parameter port** |
+| Two-rank operation | Dedicated MPI tests with zero permitted skips | **Not established without an exact-commit passing artifact** |
+| Real POM/PLA object imaging | Archived VNA repeats, nulls, known target, materials, and acceptance report | **NOT RUN** |
+| At least 3,000,000 global complex DoFs | Archived distributed convergence artifact | **NOT RUN** |
+| Peak memory at most 50% of direct | Instrumented identical-problem direct/iterative comparison | **NOT RUN** |
 
 Passing software tests proves the software checks they exercise. It does not
 prove that a particular fixture, calibration, material model, or linearized
@@ -39,7 +39,9 @@ inputs**, not as an afterthought applied after a noisy image appears.
 
 ## Quick start: pure Python canary
 
-Python 3.11 or 3.12 is supported for the measurement and inverse layers.
+Python 3.11 through 3.14 are the configured CI targets for the measurement and
+inverse layers. A version is supported only when the exact-revision CI job for
+that version passes.
 
 ```bash
 python -m venv .venv
@@ -95,8 +97,21 @@ pure-Python job cannot conceal a missing FEM runtime.
   an explicit label.
 - Complex values remain complex through noise estimation, whitening, and
   inversion.
-- A FEM solve is accepted only with a positive PETSc convergence reason and a
-  reported true relative residual.
+- Measurement and sensitivity archives use exact `complex128`, `float64`,
+  Unicode, and `int64` schema dtypes; the loader does not silently cast them.
+- Diagnosis reports both aggregate and per-frequency/per-receiver/per-source
+  repeat-floor metrics.
+- Reconstruction artifacts retain the complete compact SVD spectrum, selector
+  ranks and criterion values, status, thresholds, and input/artifact hashes.
+- The automatic whitened discrepancy target `sqrt(rows)` is only the expected
+  RMS scale under the documented complex-noise convention. If no rank meets it,
+  the artifact is `FAILED` and the CLI exits nonzero unless the user explicitly
+  requests `--allow-unmet-discrepancy`.
+- Existing JSON and reconstruction outputs are not overwritten by default;
+  `--force` is explicit and recorded in reconstruction provenance.
+- A FEM linear solve is numerically accepted only with a positive PETSc
+  convergence reason and a reported true relative residual. This is not, by
+  itself, validation of a physical port or an S-parameter.
 
 See [Data schema](docs/DATA_SCHEMA.md) and
 [Architecture](docs/ARCHITECTURE.md) for the full contracts.
@@ -129,7 +144,7 @@ src/scatter3d/
   metrics.py           volume-weighted image metrics
   provenance.py        stable hashing and manifests
   pipeline.py          checked NPZ-to-reconstruction workflow
-  fem/                  DOLFINx/PETSc mesh, forms, PML, ports, solver, checkpoints
+  fem/                  DOLFINx/PETSc mesh, forms, PML, port research, solver, checkpoints
 tests/                  pure, heavy, and MPI verification
 examples/               deterministic software canaries
 docs/                   experiment, convergence, schema, and evidence guides
@@ -153,6 +168,12 @@ currently implement a trusted nonlinear distorted-Born iterative reconstruction.
 The initial inverse layer addresses the documented small-perturbation linear
 model; use its residual and null controls to decide when that approximation is
 not credible.
+
+The historical FEM surface-current load is explicitly uncalibrated: it has no
+matched termination, power-wave reference, or S-parameter meaning. A matched
+single-mode TEM boundary and power normalization are being integrated, but the
+heavy tests and incident/outgoing modal extraction required for calibrated
+S-parameters must pass before that path is described as physical validation.
 
 ## License and citation
 

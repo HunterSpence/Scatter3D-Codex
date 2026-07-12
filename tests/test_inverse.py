@@ -9,6 +9,22 @@ from scatter3d.inverse import (
     tsvd_solve,
     whiten_system,
 )
+from scatter3d.measurement import ScatteringDataset
+
+
+def _single_observation_dataset(
+    value: complex,
+    *,
+    frequency_hz: float = 5.0e9,
+    angle_deg: float = 0.0,
+    port_label: str = "P1",
+) -> ScatteringDataset:
+    return ScatteringDataset(
+        np.asarray([[[[value]]]], dtype=np.complex128),
+        frequencies_hz=np.asarray([frequency_hz], dtype=np.float64),
+        angles_deg=np.asarray([angle_deg], dtype=np.float64),
+        port_labels=(port_label,),
+    )
 
 
 def test_paired_repeat_covariance_uses_complex_x_xh_orientation() -> None:
@@ -60,6 +76,40 @@ def test_dense_covariance_rejects_insufficient_repeat_rank() -> None:
 
     diagonal = estimate_repeat_differential_noise(repeats, repeats)
     assert diagonal.sample_covariance is None
+
+
+@pytest.mark.parametrize(
+    ("changed", "message"),
+    [
+        ({"frequency_hz": 5.1e9}, "frequency axes differ"),
+        ({"angle_deg": 1.0}, "angle axes differ"),
+        ({"port_label": "P2"}, "port labels differ"),
+    ],
+)
+def test_paired_dataset_repeats_reject_cross_stack_coordinate_mismatch(
+    changed: dict[str, float | str], message: str
+) -> None:
+    reference = [_single_observation_dataset(0.0j) for _ in range(2)]
+    dut = [_single_observation_dataset(1.0 + 0.0j, **changed) for _ in range(2)]
+
+    with pytest.raises(ValueError, match=message):
+        estimate_repeat_differential_noise(reference, dut)
+
+
+def test_raw_repeat_arrays_require_complex_nonempty_axes_and_matching_representation() -> None:
+    real = np.zeros((2, 1, 1, 1, 1), dtype=np.float64)
+    strings = np.full((2, 1, 1, 1, 1), "1+2j")
+    empty = np.zeros((2, 0, 1, 1, 1), dtype=np.complex128)
+    complex_stack = np.zeros((2, 1, 1, 1, 1), dtype=np.complex128)
+    datasets = [_single_observation_dataset(0.0j) for _ in range(2)]
+
+    for malformed in (real, strings):
+        with pytest.raises(ValueError, match="complex dtype"):
+            estimate_repeat_differential_noise(malformed, malformed)
+    with pytest.raises(ValueError, match="non-empty"):
+        estimate_repeat_differential_noise(empty, empty)
+    with pytest.raises(TypeError, match="both be raw arrays"):
+        estimate_repeat_differential_noise(complex_stack, datasets)
 
 
 def test_diagonal_whitening_scales_a_and_b_together() -> None:
@@ -200,5 +250,37 @@ def test_tsvd_rejects_ambiguous_or_unusable_settings() -> None:
         tsvd_solve(matrix, observations, method="gcv", rank=1)
     with pytest.raises(ValueError, match="noise_norm"):
         tsvd_solve(matrix, observations, method="discrepancy")
+    with pytest.raises(ValueError, match="only valid"):
+        tsvd_solve(matrix, observations, method="gcv", noise_norm=1.0)
+    with pytest.raises(ValueError, match="only valid"):
+        tsvd_solve(matrix, observations, method="gcv", energy_fraction=0.9)
     with pytest.raises(np.linalg.LinAlgError, match="nonzero"):
         tsvd_solve(np.zeros((2, 2)), observations)
+
+
+def test_seeded_complex_discrepancy_curve_matches_direct_residuals() -> None:
+    rng = np.random.default_rng(20260712)
+    for rows, columns in ((3, 2), (5, 3), (3, 5), (8, 4)):
+        for _ in range(10):
+            matrix = rng.normal(size=(rows, columns)) + 1j * rng.normal(
+                size=(rows, columns)
+            )
+            observations = rng.normal(size=rows) + 1j * rng.normal(size=rows)
+            full = tsvd_solve(
+                matrix,
+                observations,
+                method="discrepancy",
+                noise_norm=0.0,
+            )
+            u, singular_values, vh = np.linalg.svd(matrix, full_matrices=False)
+            direct = []
+            for rank in full.criterion_ranks:
+                if rank == 0:
+                    estimate = np.zeros(columns, dtype=np.complex128)
+                else:
+                    estimate = (
+                        vh[:rank].conj().T
+                        @ ((u[:, :rank].conj().T @ observations) / singular_values[:rank])
+                    )
+                direct.append(np.linalg.norm(observations - matrix @ estimate))
+            np.testing.assert_allclose(full.criterion_values, direct, rtol=1e-11, atol=1e-12)

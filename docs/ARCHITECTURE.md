@@ -47,13 +47,18 @@ prevents the calibration step from fitting away the defect signal.
 ### Inverse
 
 `scatter3d.inverse` keeps complex arithmetic native. It estimates noise from
-repeat differentials, whitens `A` and `b` together, and returns TSVD diagnostics
-including available and selected rank, singular values, residuals, solution
-norm, condition estimate, and the rank-selection criterion.
+paired same-index repeat differentials, divides sample variance by the paired
+repeat count for the variance of the mean, whitens `A` and `b` together, and
+returns TSVD diagnostics including available and selected rank, the full compact
+singular spectrum, residuals, solution norm, condition estimate, numerical-rank
+threshold, and the complete rank-selection criterion curve.
 
 The default GCV choice is useful when a noise norm is unavailable; discrepancy
 selection is preferable when repeat measurements supply a defensible noise
-norm. A fixed rank is intended for reproducibility tests, not visual tuning.
+norm. The automatic whitened `sqrt(rows)` target is only an expected RMS
+heuristic. An unmet discrepancy target produces a `FAILED` artifact and nonzero
+exit unless explicitly allowed; the override never converts the result to
+`PASSED`. A fixed rank is intended for reproducibility tests, not visual tuning.
 
 ### FEM
 
@@ -62,16 +67,21 @@ norm. A fixed rank is intended for reproducibility tests, not visual tuning.
 - `config`: immutable materials, PML, Maxwell, and linear-solver settings;
 - `tags` and `gmsh_io`: validate mesh/physical-tag contracts;
 - `pml`: Cartesian complex-stretch tensors;
-- `ports`: discrete per-port mode normalization and excitations;
+- `ports`: explicit separation between uncalibrated surface loads and the
+  in-progress matched single-mode TEM boundary/mode-normalization path;
 - `forms`: frequency-dependent Maxwell forms;
 - `solver`: one matrix/preconditioner setup per frequency with successive port
   right-hand sides, plus convergence diagnostics;
 - `checkpoints`: identity hashes that reject stale mesh/config/frequency reuse;
 - `diagnostics`: true residual and material-model comparisons.
 
-The public high-level entry is `MaxwellSweepSolver.solve(frequencies_hz,
-ports)`. DOLFINx imports are kept inside the FEM layer so measurement and inverse
-tests remain usable on ordinary Python installations.
+The historical surface-current RHS is a generic weak load only. It does not
+define a matched termination, power wave, circuit reference, or calibrated
+S-parameter. The newer matched TEM forms and electric-mode normalization are
+still integration work: heavy DOLFINx tests and incident/outgoing modal
+extraction must land and pass before `MaxwellSweepSolver` output can be described
+as a physical port result. DOLFINx imports remain inside the FEM layer so
+measurement and inverse tests are usable on ordinary Python installations.
 
 Geometry order is intentionally limited to one in the initial release. Curved
 geometry support must not be enabled until a curved-boundary convergence test is
@@ -82,8 +92,11 @@ was validated.
 
 `scatter3d.pipeline` defines a compact NPZ interchange format. It rejects
 unknown schema versions, pickle-backed arrays, non-finite values, coordinate
-mismatches, duplicate sensitivity rows, and missing row maps. It writes the
-reconstruction atomically and records input SHA-256 hashes.
+mismatches, noncanonical dtypes, duplicate sensitivity rows, and missing row
+maps. Measurement and sensitivity arrays use exact complex128/float64/Unicode/
+int64 contracts. It writes the reconstruction atomically, refuses to clobber an
+existing artifact unless explicitly forced, and records input SHA-256 hashes,
+overwrite intent, selector status, spectrum hashes, and noise-model provenance.
 
 `scatter3d.cli` deliberately exposes only offline validation, diagnosis, and
 inversion. Instrument control and billable or safety-relevant RF actions are not
@@ -120,6 +133,11 @@ A defensible result should identify at least:
 - solver options, convergence reasons, and true residuals;
 - regularization method, rank, singular values, and whitening model.
 
+The reconstruction NPZ is itself the selector evidence artifact: it retains the
+full compact singular spectrum, criterion ranks and values, status, numerical
+threshold, selected rows, floors, and hashes. A JSON summary is useful for
+inspection but does not replace that NPZ.
+
 Descriptive metadata is not allowed to change a numerical fingerprint. Secrets
 and private dataset contents never belong in a manifest.
 
@@ -130,4 +148,5 @@ and private dataset contents never belong in a manifest.
 - independently fitting reference and DUT calibration;
 - silently symmetrizing reciprocal channels;
 - a claimed nonlinear DBIM implementation;
+- describing an uncalibrated surface-current load as a VNA/S-parameter port;
 - production-scale or real-object validation without published evidence.

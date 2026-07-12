@@ -6,6 +6,9 @@ All notable changes will be documented here. The format follows
 
 ## [Unreleased]
 
+This development version has not been released. The entries below describe the
+current repository state, not completed hardware or scaling acceptance.
+
 ### Added
 
 - Clean-room Apache-2.0 project identity.
@@ -17,10 +20,27 @@ All notable changes will be documented here. The format follows
 - Verification-first CLI, measurement runbook, convergence protocol, pinned
   complex DOLFINx container, and separate pure/heavy/MPI CI gates.
 
+### Changed
+
+- Expanded the declared pure-Python CI matrix to Python 3.11 through 3.14 while
+  retaining an open-ended `>=3.11` package requirement.
+- Added reproducibility material to the source distribution and archived built
+  wheel/source artifacts in CI.
+- Added static workflow, Compose, Bash, citation, local-link, and secret checks
+  ahead of numerical CI gates.
+
+### Security
+
+- Excluded dotenv files, credential/key formats, private measurements, and
+  generated numerical artifacts from Git and Docker contexts while retaining
+  explicitly placed example fixtures.
+
 ### Validation boundary
 
 - Pure numerical and schema paths are covered by automated tests.
 - Heavy FEM and MPI paths are required to execute in their dedicated CI jobs.
+- The expanded release, container, and CI gates remain unverified until their
+  corresponding jobs execute successfully on the remote runner and GitHub.
 - No real POM/PLA VNA dataset is distributed, so a successful real-object image
   is **not** claimed.
 

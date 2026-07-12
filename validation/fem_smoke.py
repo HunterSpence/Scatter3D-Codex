@@ -9,8 +9,8 @@ actually met by the recorded run.
 from __future__ import annotations
 
 import argparse
-from dataclasses import asdict
 import json
+from dataclasses import asdict
 from pathlib import Path
 
 import numpy as np
@@ -68,7 +68,7 @@ def main() -> int:
     if args.subdivisions < 1:
         parser.error("subdivisions must be positive")
     if any(value <= 0 for value in args.frequencies_hz) or any(
-        b <= a for a, b in zip(args.frequencies_hz, args.frequencies_hz[1:])
+        b <= a for a, b in zip(args.frequencies_hz, args.frequencies_hz[1:], strict=False)
     ):
         parser.error("frequencies must be positive and strictly increasing")
     if args.compare_direct_json and args.solver != "iterative":
@@ -85,7 +85,11 @@ def main() -> int:
         MaterialMap,
         MaxwellProblemConfig,
     )
-    from scatter3d.fem.ports import PortDefinition, PortExcitation
+    from scatter3d.fem.ports import (
+        MatchedTEMPortExcitation,
+        PortDefinition,
+        normalize_port_mode,
+    )
     from scatter3d.fem.solver import MaxwellSweepSolver
     from scatter3d.fem.tags import (
         BoundaryTagContract,
@@ -103,6 +107,15 @@ def main() -> int:
         if args.solver == "direct"
         else LinearSolverConfig.iterative_maxwell()
     )
+    definitions = tuple(
+        PortDefinition(
+            name,
+            tag,
+            field_wave_impedance_ohm=200.0,
+            outgoing_propagation_index=1.0,
+        )
+        for name, tag in (("left", 10), ("right", 11))
+    )
     solver = MaxwellSweepSolver.from_mesh(
         domain,
         cell_tags,
@@ -110,13 +123,16 @@ def main() -> int:
         contract,
         MaterialMap(Material(2.0, conductivity_s_per_m=0.02, name="lossy")),
         MaxwellProblemConfig(polynomial_degree=args.degree),
+        matched_ports=definitions,
         solver_config=solver_config,
         initial_frequency_hz=args.frequencies_hz[0],
     )
     excitations = []
-    for name, tag in (("left", 10), ("right", 11)):
-        current = fem.Function(solver.function_space, name=f"J_{name}")
-        current.interpolate(
+    for definition in definitions:
+        raw_mode = fem.Function(
+            solver.function_space, name=f"mode_raw_{definition.name}"
+        )
+        raw_mode.interpolate(
             lambda x: np.vstack(
                 (
                     np.zeros(x.shape[1], dtype=PETSc.ScalarType),
@@ -125,8 +141,8 @@ def main() -> int:
                 )
             )
         )
-        definition = PortDefinition(name, tag)
-        excitations.append(PortExcitation(definition, current))
+        mode = normalize_port_mode(raw_mode, facet_tags, definition)
+        excitations.append(MatchedTEMPortExcitation(mode))
 
     result = solver.solve(
         args.frequencies_hz, excitations, retain_solutions=False

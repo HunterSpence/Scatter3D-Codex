@@ -49,7 +49,11 @@ def _solver_and_ports(comm, iterative: bool = False):
         MaterialMap,
         MaxwellProblemConfig,
     )
-    from scatter3d.fem.ports import PortDefinition, PortExcitation
+    from scatter3d.fem.ports import (
+        MatchedTEMPortExcitation,
+        PortDefinition,
+        normalize_port_mode,
+    )
     from scatter3d.fem.solver import MaxwellSweepSolver
     from scatter3d.fem.tags import (
         BoundaryTagContract,
@@ -67,6 +71,15 @@ def _solver_and_ports(comm, iterative: bool = False):
         if iterative
         else LinearSolverConfig.direct()
     )
+    definitions = tuple(
+        PortDefinition(
+            name,
+            tag,
+            field_wave_impedance_ohm=200.0,
+            outgoing_propagation_index=1.0,
+        )
+        for name, tag in (("left", 10), ("right", 11))
+    )
     solver = MaxwellSweepSolver.from_mesh(
         domain,
         cell_tags,
@@ -74,13 +87,14 @@ def _solver_and_ports(comm, iterative: bool = False):
         contract,
         MaterialMap(Material(2.0, conductivity_s_per_m=0.02, name="lossy")),
         MaxwellProblemConfig(polynomial_degree=1),
+        matched_ports=definitions,
         solver_config=solver_config,
         initial_frequency_hz=1.0e8,
     )
     ports = []
-    for name, tag in (("left", 10), ("right", 11)):
-        current = fem.Function(solver.function_space)
-        current.interpolate(
+    for definition in definitions:
+        raw_mode = fem.Function(solver.function_space)
+        raw_mode.interpolate(
             lambda x: np.vstack(
                 (
                     np.zeros(x.shape[1], dtype=PETSc.ScalarType),
@@ -89,8 +103,8 @@ def _solver_and_ports(comm, iterative: bool = False):
                 )
             )
         )
-        definition = PortDefinition(name, tag)
-        ports.append(PortExcitation(definition, current))
+        mode = normalize_port_mode(raw_mode, facet_tags, definition)
+        ports.append(MatchedTEMPortExcitation(mode))
     return solver, ports
 
 
@@ -119,6 +133,7 @@ def test_degree_three_edge_space_builds() -> None:
 
     from scatter3d.fem.config import Material, MaterialMap, MaxwellProblemConfig
     from scatter3d.fem.forms import build_maxwell_forms
+    from scatter3d.fem.ports import PortDefinition
     from scatter3d.fem.tags import (
         BoundaryTagContract,
         MeshTagContract,
@@ -136,6 +151,20 @@ def test_degree_three_edge_space_builds() -> None:
         ),
         MaterialMap(Material(1.0)),
         MaxwellProblemConfig(polynomial_degree=3),
+        matched_ports=(
+            PortDefinition(
+                "left",
+                10,
+                field_wave_impedance_ohm=377.0,
+                outgoing_propagation_index=1.0,
+            ),
+            PortDefinition(
+                "right",
+                11,
+                field_wave_impedance_ohm=377.0,
+                outgoing_propagation_index=1.0,
+            ),
+        ),
     )
     assert forms.function_space.dofmap.index_map.size_global > 0
 

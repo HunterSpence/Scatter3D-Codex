@@ -7,17 +7,28 @@ reproduced a paper's hardware result; reproduced results are listed only in
 
 ## Imaging method and experiment context
 
-- EuCAP 2025, *Three-Dimensional Microwave Imaging Using a Scattering-Parameter
-  Data Equation*: <https://doi.org/10.23919/EuCAP63536.2025.10999660>
-- URSI EMTS 2025 follow-up paper: <https://www.ursi.org/proceedings/commission/ComB/EMTS/2025/papers/144.pdf>
+- Alexandros Pallaris and Daniel Sjöberg, EuCAP 2025, *Microwave
+  Reconstruction of Fabrication Defects in Known Objects Using Scattering
+  Parameter Sensitivities*: <https://doi.org/10.23919/EuCAP63536.2025.10999660>
+- Alexandros Pallaris and Daniel Sjöberg, URSI-B EMTS 2025, *3D Simulation Code
+  Using Parallel Processing for Microwave Reconstruction of Defects in Known
+  Objects From Scattering Parameters*:
+  <https://www.ursi.org/proceedings/commission/ComB/EMTS/2025/papers/144.pdf>
 - Fresnel Institute 3-D electromagnetic inverse-scattering database:
   <https://www.fresnel.fr/3Ddatabase/>
 - Oblique-illumination microwave tomography study:
   <https://doi.org/10.3390/s16071046>
 
-The supplied EuCAP experiment is a synthetic demonstration. It does not, by
-itself, validate transfer of a simulated sensitivity operator to a real VNA,
-antennas, cables, fixtures, and rotating target.
+The EuCAP DOI title above matches the authors' institutional publication
+metadata. The URSI follow-up explicitly states that both `A` and `b` in its
+reported 3-D reconstruction are taken from simulation and describes measured
+S-parameters as the intended real setup. Neither citation, by itself, validates
+transfer of a simulated sensitivity operator to a real VNA, antennas, cables,
+fixtures, and rotating target.
+
+These papers motivate the scientific problem only. Scatter3D-Codex remains an
+original Apache-2.0 clean-room implementation and does not copy or relicense the
+authors' or any third party's source code.
 
 ## VNA calibration and data interchange
 
@@ -65,3 +76,8 @@ large-problem research path is right-preconditioned FGMRES with a shifted
 Maxwell surrogate and a verified two-level coarse correction. Neither the
 3,000,000-DoF target nor a 50% memory reduction may be claimed until the
 same-problem benchmark in `CONVERGENCE_PROTOCOL.md` passes.
+
+The listed solver references do not validate the repository's current FEM port
+path. The historical surface-current load is uncalibrated, and matched TEM work
+remains in progress until its heavy tests and incident/outgoing modal extraction
+pass.

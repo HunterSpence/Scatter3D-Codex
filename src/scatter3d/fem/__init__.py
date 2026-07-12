@@ -16,7 +16,14 @@ from .config import (
 )
 from .diagnostics import MaterialChange, compare_material_models
 from .gmsh_io import LoadedMesh, load_gmsh_mesh
-from .ports import PortDefinition, PortExcitation, normalize_port_mode
+from .ports import (
+    MatchedTEMPortExcitation,
+    NormalizedPortMode,
+    PortDefinition,
+    UncalibratedSurfaceCurrentExcitation,
+    normalize_port_mode,
+    total_electric_modal_coefficient,
+)
 from .solver import (
     ExperimentSweepResult,
     FrequencyDiagnostics,
@@ -39,22 +46,25 @@ __all__ = [
     "FrequencyDiagnostics",
     "LinearSolverConfig",
     "LoadedMesh",
+    "MatchedTEMPortExcitation",
     "Material",
     "MaterialChange",
     "MaterialMap",
     "MaxwellProblemConfig",
     "MaxwellSweepSolver",
     "MeshTagContract",
+    "NormalizedPortMode",
     "PMLConfig",
     "PortDefinition",
-    "PortExcitation",
     "SweepResult",
     "TagContractError",
+    "UncalibratedSurfaceCurrentExcitation",
     "VolumeTagContract",
     "checkpoint_fingerprint",
     "compare_material_models",
     "load_gmsh_mesh",
     "normalize_port_mode",
     "sha256_file",
+    "total_electric_modal_coefficient",
     "validate_mesh_tags",
 ]

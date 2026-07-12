@@ -14,6 +14,7 @@ from __future__ import annotations
 import csv
 import hashlib
 import os
+import tempfile
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -81,7 +82,9 @@ class ScatteringDataset:
             raise ValueError("angles_deg must match the angle axis")
         if len(labels) != s.shape[2]:
             raise ValueError("port_labels must match the receiver/source axes")
-        if any(not label.strip() for label in labels) or len(set(labels)) != len(labels):
+        if any(label != label.strip() for label in labels):
+            raise ValueError("port labels must not contain leading or trailing whitespace")
+        if any(not label for label in labels) or len(set(labels)) != len(labels):
             raise ValueError("port labels must be non-empty and unique")
         if not np.all(np.isfinite(frequencies)) or np.any(frequencies <= 0.0):
             raise ValueError("frequencies_hz must be finite and positive")
@@ -201,10 +204,12 @@ def _strict_float(text: str, *, field_name: str, line_number: int) -> float:
 def _contiguous_count(indices: set[int], *, axis_name: str) -> int:
     if not indices:
         raise ValueError(f"CSV contains no {axis_name} indices")
-    expected = set(range(max(indices) + 1))
-    if indices != expected:
+    # Do not materialize ``range(max_index + 1)``: one corrupt sparse index
+    # must not turn a validation error into an unbounded allocation.
+    count = len(indices)
+    if min(indices) != 0 or max(indices) != count - 1:
         raise ValueError(f"{axis_name} indices must be contiguous and start at zero")
-    return len(expected)
+    return count
 
 
 def _axis_record(
@@ -223,9 +228,11 @@ def _csv_hashes(
     frequencies: np.ndarray,
     port_labels: Sequence[str],
     order_indices: np.ndarray,
+    *,
+    csv_sha256: str | None = None,
 ) -> dict[str, str]:
     return {
-        "csv_sha256": sha256_file(path),
+        "csv_sha256": sha256_file(path) if csv_sha256 is None else csv_sha256,
         "csv_schema_sha256": hashlib.sha256(
             canonical_json_bytes({"schema": CSV_SCHEMA, "columns": CSV_COLUMNS})
         ).hexdigest(),
@@ -263,6 +270,7 @@ def read_scattering_csv(
     receiver_indices: set[int] = set()
     source_indices: set[int] = set()
 
+    source_sha256_before = sha256_file(source)
     with source.open("r", encoding="utf-8-sig", newline="") as stream:
         reader = csv.reader(stream)
         try:
@@ -292,11 +300,15 @@ def read_scattering_csv(
             ri = _strict_integer(
                 row[4], field_name="receiver_index", line_number=line_number
             )
-            receiver_label = row[5].strip()
+            receiver_label = row[5]
             si = _strict_integer(
                 row[6], field_name="source_index", line_number=line_number
             )
-            source_label = row[7].strip()
+            source_label = row[7]
+            if receiver_label != receiver_label.strip() or source_label != source_label.strip():
+                raise ValueError(
+                    f"line {line_number}: port labels must not contain leading or trailing whitespace"
+                )
             if not receiver_label or not source_label:
                 raise ValueError(f"line {line_number}: port labels must be non-empty")
             real = _strict_float(row[8], field_name="s_real", line_number=line_number)
@@ -360,7 +372,17 @@ def read_scattering_csv(
     frequencies = np.asarray(
         [frequency_values[i] for i in range(nf)], dtype=np.float64
     )
-    hashes = _csv_hashes(source, angles, frequencies, labels, order_indices)
+    source_sha256_after = sha256_file(source)
+    if source_sha256_after != source_sha256_before:
+        raise OSError("scattering CSV changed while it was being parsed")
+    hashes = _csv_hashes(
+        source,
+        angles,
+        frequencies,
+        labels,
+        order_indices,
+        csv_sha256=source_sha256_before,
+    )
     if expected_hashes is not None:
         unknown = set(expected_hashes).difference(hashes)
         if unknown:
@@ -384,27 +406,43 @@ def write_scattering_csv(
 
     destination = Path(path)
     destination.parent.mkdir(parents=True, exist_ok=True)
-    temporary = destination.with_name(destination.name + ".tmp")
-    with temporary.open("w", encoding="utf-8", newline="") as stream:
-        writer = csv.writer(stream, lineterminator="\n")
-        writer.writerow(CSV_COLUMNS)
-        for ai, fi, ri, si in np.ndindex(dataset.shape):
-            value = dataset.s[ai, fi, ri, si]
-            writer.writerow(
-                (
-                    ai,
-                    format(dataset.angles_deg[ai], ".17g"),
-                    fi,
-                    format(dataset.frequencies_hz[fi], ".17g"),
-                    ri,
-                    dataset.port_labels[ri],
-                    si,
-                    dataset.port_labels[si],
-                    format(value.real, ".17g"),
-                    format(value.imag, ".17g"),
+    temporary: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            newline="",
+            dir=destination.parent,
+            prefix=f".{destination.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as stream:
+            temporary = Path(stream.name)
+            writer = csv.writer(stream, lineterminator="\n")
+            writer.writerow(CSV_COLUMNS)
+            for ai, fi, ri, si in np.ndindex(dataset.shape):
+                value = dataset.s[ai, fi, ri, si]
+                writer.writerow(
+                    (
+                        ai,
+                        format(dataset.angles_deg[ai], ".17g"),
+                        fi,
+                        format(dataset.frequencies_hz[fi], ".17g"),
+                        ri,
+                        dataset.port_labels[ri],
+                        si,
+                        dataset.port_labels[si],
+                        format(value.real, ".17g"),
+                        format(value.imag, ".17g"),
+                    )
                 )
-            )
-    os.replace(temporary, destination)
+            stream.flush()
+            os.fsync(stream.fileno())
+        assert temporary is not None
+        os.replace(temporary, destination)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
     order = np.asarray(list(np.ndindex(dataset.shape)), dtype=np.int64)
     return MappingProxyType(
         _csv_hashes(

@@ -30,8 +30,8 @@ NPZ files are loaded with `allow_pickle=False`.
 | Key | dtype and shape | Requirement |
 |---|---|---|
 | `schema_version` | scalar Unicode | exactly `scatter3d.measurement.v1` |
-| `reference_s` | complex, `[Rr,A,F,P,P]` | reference repeats |
-| `dut_s` | complex, `[Rd,A,F,P,P]` | DUT repeats |
+| `reference_s` | complex128, `[Rr,A,F,P,P]` | reference repeats |
+| `dut_s` | complex128, `[Rd,A,F,P,P]` | DUT repeats |
 | `frequencies_hz` | float64, `[F]` | finite, positive, strictly increasing |
 | `angles_deg` | float64, `[A]` | finite and strictly increasing |
 | `port_labels` | Unicode, `[P]` | nonempty and unique |
@@ -41,6 +41,9 @@ may have different repeat counts but must share all measurement axes exactly.
 When their repeat counts are equal and at least two, equal repeat indices declare
 an acquisition pair for the default mean-differential noise estimate.
 No frequency interpolation or port relabelling occurs during load.
+The listed dtypes are exact. In particular, complex64 measurement tensors,
+integer coordinate arrays, byte-string labels, and object arrays are rejected
+rather than promoted or decoded implicitly.
 
 Example:
 
@@ -81,25 +84,57 @@ the precise sensitivity equation. These fields are not guessed by the CLI.
 
 ## Reconstruction NPZ: `scatter3d.reconstruction.v1`
 
-The CLI writes:
+The CLI writes the complete audit artifact below. NumPy scalar strings use a
+Unicode dtype; hashes are lowercase SHA-256 strings.
 
-| Key | Meaning |
-|---|---|
-| `estimate` | complex permittivity-contrast vector |
-| `selected_rank` | retained TSVD rank |
-| `method` | fixed, GCV, discrepancy, or energy |
-| `residual_norm` | `||A x - b||_2` on used rows |
-| `relative_residual` | residual divided by `||b||_2` |
-| `solve_residual_norm` | residual in the whitened solve space, or raw space when unwhitened |
-| `channel_mode`, `row_order` | explicit row selection and canonical ordering |
-| `whitening_used`, `whitening_reason` | whether/why paired-repeat whitening ran |
-| `paired_repeats` | paired repeat count, or `-1` when unavailable |
-| `noise_standard_deviation` | selected-row standard deviation of the mean differential |
-| `noise_model_sha256` | hash of that standard-deviation vector |
-| `noise_norm_used` | discrepancy target in solve space; NaN when not applicable |
-| `bundle_sha256` | exact measurement NPZ hash |
-| `sensitivity_sha256` | exact sensitivity NPZ hash |
-| `row_indices` | canonical rows used |
+| Key | dtype and shape | Meaning |
+|---|---|---|
+| `schema_version` | scalar Unicode | exactly `scatter3d.reconstruction.v1` |
+| `estimate` | complex128, `[V]` | reconstructed complex contrast vector |
+| `status` | scalar Unicode | `PASSED`, or `FAILED` when a discrepancy target was unmet |
+| `requested_rank` | scalar int64 | fixed rank, or `-1` when not requested |
+| `selected_rank` | scalar int64 | retained TSVD rank; discrepancy/GCV may select rank zero |
+| `available_rank` | scalar int64 | singular values strictly above the recorded numerical threshold |
+| `method` | scalar Unicode | `fixed`, `gcv`, `discrepancy`, or `energy` |
+| `channel_mode` | scalar Unicode | `all`, `transmission`, or `reflection` |
+| `row_order` | scalar Unicode | `C:[angle,frequency,receiver,source]` |
+| `residual_norm` | scalar float64 | `||A x - b||_2` on the selected unwhitened rows |
+| `relative_residual` | scalar float64 | unwhitened residual divided by `||b||_2` |
+| `solve_residual_norm` | scalar float64 | residual in whitened solve space, or raw space when unwhitened |
+| `solution_norm` | scalar float64 | `||x||_2` |
+| `selected_condition_number` | scalar float64 | retained-spectrum condition estimate; NaN when undefined |
+| `singular_value_threshold` | scalar float64 | numerical-rank cutoff |
+| `singular_values` | float64, `[min(M,V)]` | full compact singular-value spectrum returned by the SVD |
+| `singular_values_sha256` | scalar Unicode | deterministic array hash of `singular_values` |
+| `criterion_ranks` | int64, `[K]` | selector candidate ranks; GCV/discrepancy include rank zero |
+| `criterion_values` | float64, `[K]` | residual, GCV, discrepancy-residual, or cumulative-energy curve |
+| `criterion_sha256` | scalar Unicode | combined deterministic hash of ranks and criterion values |
+| `selection_target_met` | scalar int8 | `-1` not applicable, `0` unmet, `1` met |
+| `whitening_used` | scalar bool | whether paired-repeat diagonal whitening was applied |
+| `whitening_reason` | scalar Unicode | explicit use, disablement, or unavailable-evidence reason |
+| `paired_repeats` | scalar int64 | paired repeat count, or `-1` when unavailable |
+| `noise_standard_deviation` | float64, `[M_used]` or `[0]` | selected-row standard deviation of the mean differential |
+| `noise_model_sha256` | scalar Unicode | hash of that vector, or an empty string when unwhitened |
+| `noise_norm_used` | scalar float64 | discrepancy target in solve space; NaN when not applicable |
+| `noise_norm_basis` | scalar Unicode | `user_supplied`, `whitened_expected_rms_sqrt_rows`, or empty |
+| `energy_fraction_used` | scalar float64 | requested/default fraction; NaN outside energy mode |
+| `noise_relative_floor` | scalar float64 | registered relative variance floor |
+| `noise_absolute_floor` | scalar float64 | registered absolute variance floor |
+| `overwrite_requested` | scalar bool | whether the run explicitly authorized clobbering via `--force` |
+| `bundle_sha256` | scalar Unicode | exact measurement NPZ content hash |
+| `sensitivity_sha256` | scalar Unicode | exact sensitivity NPZ content hash |
+| `row_indices` | int64, `[M_used]` | canonical measurement rows actually used |
+
+The automatic discrepancy target `sqrt(M_used)` is emitted only after paired
+repeat whitening and is an expected RMS heuristic under `E|z_i|^2=1`, not a
+confidence bound. If no candidate rank meets the target, the NPZ still records
+the best available full-rank result but sets `status=FAILED` and
+`selection_target_met=0`. The CLI exits `1` unless the caller explicitly uses
+`--allow-unmet-discrepancy`; that override does not rewrite the status.
+
+Reconstruction and JSON outputs are created atomically and are no-clobber by
+default. `--force` is required to replace an existing path, and the NPZ records
+that request in `overwrite_requested`.
 
 Complex estimates are not silently converted to real. Interpret the imaginary
 part according to the time convention and material model used to build `A`.

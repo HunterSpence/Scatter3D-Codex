@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from math import isfinite, pi
 from types import MappingProxyType
-from typing import Any, Mapping
+from typing import Any
 
 EPSILON_0 = 8.854_187_812_8e-12
 MU_0 = 1.256_637_062_12e-6
@@ -146,7 +147,7 @@ class PMLConfig:
             raise ValueError("PML bounds and thickness must contain three values")
         if not all(isfinite(v) for v in (*lo, *hi, *thickness)):
             raise ValueError("PML bounds and thickness must be finite")
-        if any(a >= b for a, b in zip(lo, hi)):
+        if any(a >= b for a, b in zip(lo, hi, strict=False)):
             raise ValueError("each physical_min_m coordinate must be below physical_max_m")
         if any(v < 0 for v in thickness) or not any(v > 0 for v in thickness):
             raise ValueError("PML thickness must be nonnegative and nonzero on at least one axis")
@@ -257,7 +258,7 @@ class LinearSolverConfig:
         return self.solver_path == "iterative"
 
     @classmethod
-    def direct(cls, *, factor_solver_type: str = "mumps") -> "LinearSolverConfig":
+    def direct(cls, *, factor_solver_type: str = "mumps") -> LinearSolverConfig:
         """Small-problem reference path: one sparse factorization per frequency."""
 
         return cls(
@@ -268,7 +269,7 @@ class LinearSolverConfig:
         )
 
     @classmethod
-    def iterative_maxwell(cls, **overrides: Any) -> "LinearSolverConfig":
+    def iterative_maxwell(cls, **overrides: Any) -> LinearSolverConfig:
         """Distributed, non-factorizing baseline for large edge-element systems.
 
         FGMRES with overlapping additive Schwarz and local ILU(0) is a

@@ -12,6 +12,7 @@ import hashlib
 import json
 import math
 import os
+import tempfile
 from collections.abc import Mapping
 from dataclasses import fields, is_dataclass
 from pathlib import Path
@@ -189,9 +190,23 @@ def write_manifest(path: str | Path, manifest: Mapping[str, Any]) -> str:
 
     destination = Path(path)
     destination.parent.mkdir(parents=True, exist_ok=True)
-    temporary = destination.with_name(destination.name + ".tmp")
-    temporary.write_bytes(canonical_json_bytes(normalized))
-    os.replace(temporary, destination)
+    temporary: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="wb",
+            dir=destination.parent,
+            prefix=f".{destination.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as stream:
+            temporary = Path(stream.name)
+            stream.write(canonical_json_bytes(normalized))
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, destination)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
     return expected
 
 
