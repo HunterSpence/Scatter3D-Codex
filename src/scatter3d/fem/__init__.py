@@ -14,7 +14,16 @@ from .config import (
     MaxwellProblemConfig,
     PMLConfig,
 )
-from .diagnostics import MaterialChange, compare_material_models
+from .diagnostics import (
+    EffectiveSolverHierarchy,
+    MaterialChange,
+    RequestedSolverHierarchy,
+    SolverComponentDiagnostics,
+    SolverHierarchyDiagnostics,
+    compare_material_models,
+    parse_petsc_asm_view,
+    validate_effective_solver_hierarchy,
+)
 from .gmsh_io import LoadedMesh, load_gmsh_mesh
 from .ports import (
     MatchedTEMPortExcitation,
@@ -41,6 +50,7 @@ from .tags import (
 __all__ = [
     "BoundaryTagContract",
     "CheckpointIdentity",
+    "EffectiveSolverHierarchy",
     "ExperimentMaterials",
     "ExperimentSweepResult",
     "FrequencyDiagnostics",
@@ -56,6 +66,9 @@ __all__ = [
     "NormalizedPortMode",
     "PMLConfig",
     "PortDefinition",
+    "RequestedSolverHierarchy",
+    "SolverComponentDiagnostics",
+    "SolverHierarchyDiagnostics",
     "SweepResult",
     "TagContractError",
     "UncalibratedSurfaceCurrentExcitation",
@@ -64,7 +77,9 @@ __all__ = [
     "compare_material_models",
     "load_gmsh_mesh",
     "normalize_port_mode",
+    "parse_petsc_asm_view",
     "sha256_file",
     "total_electric_modal_coefficient",
+    "validate_effective_solver_hierarchy",
     "validate_mesh_tags",
 ]

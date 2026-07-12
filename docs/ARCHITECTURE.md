@@ -71,7 +71,8 @@ exit unless explicitly allowed; the override never converts the result to
   in-progress matched single-mode TEM boundary/mode-normalization path;
 - `forms`: frequency-dependent Maxwell forms;
 - `solver`: one matrix/preconditioner setup per frequency with successive port
-  right-hand sides, plus convergence diagnostics;
+  right-hand sides, true-residual checks, and requested/setup-observed solver
+  diagnostics;
 - `checkpoints`: identity hashes that reject stale mesh/config/frequency reuse;
 - `diagnostics`: true residual and material-model comparisons.
 
@@ -118,6 +119,38 @@ PETSc explicitly supports repeated `KSPSolve` calls for the same operator and
 different right-hand sides. Reusing a factorization across a changed frequency
 or material model is forbidden.
 
+PETSc options are installed under a unique prefix for each KSP. Some
+preconditioners, including ASM, do not create and configure nested subdomain KSP
+and PC objects until `KSPSetUp`. The options must therefore remain installed
+through setup and may be removed from PETSc's global options database only
+afterward. Revision `c3c1ded` corrected an earlier lifecycle error that removed
+them after `KSPSetFromOptions` but before setup, causing a requested subdomain LU
+to remain PETSc's default ILU. The regression test proves nested options are
+consumed during setup, and the corrected remote run was independently inspected
+with `-ksp_view`.
+
+The current development solver retains both requested and setup-observed PETSc
+configuration. After `KSPSetUp`, it checks the effective top-level KSP/PC,
+factor backend, preconditioning side, tolerances, and iteration cap against the
+typed configuration. For ASM it aggregates the live subdomain KSP/PC hierarchy
+across MPI ranks, parses restriction/interpolation type and overlap from PETSc's
+official ASCII view, and retains the raw view in diagnostics. A mismatch fails
+closed; requested options alone are never treated as effective-runtime evidence.
+
+The current development forms distinguish the unchanged physical Maxwell
+operator `A` from a separately assembled absorption-shifted preconditioning
+operator `P`. A positive dimensionless shift adds artificial loss only to the
+mass term in `P`; the physical form and all right-hand sides remain unchanged.
+The solver calls `KSPSetOperators(A, P)` and always recomputes the acceptance
+residual with `A`. Zero shift has explicit identity semantics and reuses `A` as
+`P` without a duplicate matrix assembly.
+
+This shifted-P implementation is still a one-level preconditioner. No genuine
+coarse correction has been executed, and the p=3-to-p=1 p-multigrid candidate
+remains **NOT RUN**. Source availability is not convergence evidence; the
+historical `c3c1ded` scaling results remain unchanged until a new exact-revision
+artifact is produced.
+
 ## Provenance boundary
 
 A defensible result should identify at least:
@@ -132,6 +165,13 @@ A defensible result should identify at least:
 - MPI ranks and thread limits;
 - solver options, convergence reasons, and true residuals;
 - regularization method, rank, singular values, and whitening model.
+
+The FEM validation artifact schema
+`scatter3d.validation.fem_smoke/v2` records source identity, process command,
+container/base-image identities, runtime versions, cgroup memory metadata, a
+canonical physical-problem identity, requested/effective solver configuration,
+and per-frequency preconditioner metrics. Writes are atomic and no-clobber by
+default; replacing an artifact requires explicit `--overwrite`.
 
 The reconstruction NPZ is itself the selector evidence artifact: it retains the
 full compact singular spectrum, criterion ranks and values, status, numerical

@@ -1,10 +1,14 @@
 # The digest makes the numerical base reproducible even if the v0.10.0 tag moves.
 FROM dolfinx/dolfinx:v0.10.0@sha256:f7cce2a2271bf838c080751348c471064acb41fef0330e2c08178a688f71890d
 
+ARG SCATTER3D_GIT_COMMIT=""
+ARG SCATTER3D_GIT_DIRTY=""
+
 LABEL org.opencontainers.image.title="Scatter3D-Codex" \
       org.opencontainers.image.description="Complex DOLFINx/PETSc verification runtime" \
       org.opencontainers.image.source="https://github.com/HunterSpence/Scatter3D-Codex" \
-      org.opencontainers.image.licenses="Apache-2.0"
+      org.opencontainers.image.licenses="Apache-2.0" \
+      org.opencontainers.image.revision="${SCATTER3D_GIT_COMMIT}"
 
 # Select the complex-scalar installation for non-interactive commands and cap
 # threaded BLAS so MPI ranks do not oversubscribe a workstation or runner.
@@ -18,7 +22,9 @@ ENV PETSC_ARCH=linux-gnu-complex128-32 \
     OPENBLAS_NUM_THREADS=1 \
     NUMEXPR_NUM_THREADS=1 \
     PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1
+    PYTHONDONTWRITEBYTECODE=1 \
+    SCATTER3D_GIT_COMMIT="${SCATTER3D_GIT_COMMIT}" \
+    SCATTER3D_GIT_DIRTY="${SCATTER3D_GIT_DIRTY}"
 
 WORKDIR /opt/scatter3d
 

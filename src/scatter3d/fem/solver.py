@@ -19,9 +19,12 @@ from .config import (
 )
 from .diagnostics import (
     MaterialChange,
+    SolverHierarchyDiagnostics,
     compare_material_models,
+    inspect_petsc_solver_hierarchy,
     petsc_true_relative_residual,
     process_peak_rss_bytes,
+    validate_effective_solver_hierarchy,
 )
 from .forms import MaxwellForms, build_maxwell_forms
 from .ports import MatchedTEMPortExcitation, PortDefinition
@@ -46,11 +49,17 @@ class FrequencyDiagnostics:
     local_owned_dofs: int
     matrix_nonzeros: int
     matrix_memory_bytes_sum: int | None
+    preconditioner_absorption_shift: float
+    preconditioner_operator_is_physical: bool
+    preconditioner_matrix_nonzeros: int
+    preconditioner_matrix_memory_bytes_sum: int | None
+    preconditioner_assembly_seconds: float
     rank_peak_rss_bytes_max: int | None
     rank_peak_rss_bytes_sum: int | None
     assembly_seconds: float
     setup_seconds: float
     solver_path: str
+    solver_hierarchy: SolverHierarchyDiagnostics
     port_solves: tuple[PortSolveDiagnostics, ...]
 
 
@@ -59,10 +68,21 @@ class SweepResult:
     solutions: dict[float, dict[str, Any]]
     diagnostics: tuple[FrequencyDiagnostics, ...]
     matrix_assemblies: int
+    preconditioner_matrix_assemblies: int
     operator_setups: int
-    numeric_factorizations: int
+    global_numeric_factorizations: int
     rhs_solves: int
     solver_path: str
+
+    @property
+    def numeric_factorizations(self) -> int:
+        """Backward-compatible alias for global top-level factorizations.
+
+        Local factorizations inside ASM or future multilevel PCs are not
+        included in this counter.
+        """
+
+        return self.global_numeric_factorizations
 
 
 @dataclass(frozen=True, slots=True)
@@ -157,12 +177,14 @@ class MaxwellSweepSolver:
     def function_space(self) -> Any:
         return self.forms.function_space
 
-    def _configure_ksp(self, matrix: Any) -> tuple[Any, str, list[str]]:
+    def _configure_ksp(
+        self, matrix: Any, preconditioner_matrix: Any
+    ) -> tuple[Any, str, list[str]]:
         from petsc4py import PETSc
 
         config = self.solver_config
         ksp = PETSc.KSP().create(self.forms.mesh.comm)
-        ksp.setOperators(matrix)
+        ksp.setOperators(matrix, preconditioner_matrix)
         ksp.setType(config.ksp_type)
         side = {
             "left": PETSc.PC.Side.LEFT,
@@ -187,11 +209,23 @@ class MaxwellSweepSolver:
         ksp.setOptionsPrefix(prefix)
         options = PETSc.Options()
         installed: list[str] = []
-        for raw_key, value in config.petsc_options.items():
-            key = prefix + str(raw_key).lstrip("-")
-            options[key] = value
-            installed.append(key)
-        ksp.setFromOptions()
+        try:
+            for raw_key, value in config.petsc_options.items():
+                key = prefix + str(raw_key).lstrip("-")
+                options[key] = value
+                installed.append(key)
+            ksp.setFromOptions()
+            effective_pc_type = str(pc.getType()).lower()
+            if config.is_iterative and effective_pc_type in {"lu", "cholesky"}:
+                raise RuntimeError(
+                    "iterative PETSc configuration resolved to a global "
+                    f"factorizing PC {effective_pc_type!r} before setup"
+                )
+        except Exception:
+            for key in installed:
+                del options[key]
+            ksp.destroy()
+            raise
         if hasattr(ksp, "setErrorIfNotConverged"):
             # Always preserve PETSc's divergence reason, iteration count, and
             # true residual. The public flag controls the explicit checked
@@ -234,116 +268,173 @@ class MaxwellSweepSolver:
         all_solutions: dict[float, dict[str, Any]] = {}
         frequency_diagnostics: list[FrequencyDiagnostics] = []
         matrix_assemblies = 0
+        preconditioner_matrix_assemblies = 0
         operator_setups = 0
         numeric_factorizations = 0
         rhs_solves = 0
 
         for frequency in frequencies:
-            self.forms.update_frequency(frequency)
-            start = perf_counter()
-            matrix = fem_petsc.assemble_matrix(
-                self.forms.bilinear_form, bcs=self.forms.boundary_conditions
-            )
-            matrix.assemble()
-            assembly_seconds = perf_counter() - start
-            matrix_assemblies += 1
-            nonzeros, matrix_memory = _matrix_metrics(matrix, comm)
-
-            ksp, _, installed_options = self._configure_ksp(matrix)
-            start = perf_counter()
+            matrix = None
+            preconditioner_matrix = None
+            ksp = None
             try:
-                # ASM creates its nested KSP/PC objects during setup. Keep the
-                # temporary prefixed options installed until those objects have
-                # consumed them, then remove them from PETSc's global database.
-                ksp.setUp()
-            finally:
-                options = PETSc.Options()
-                for key in installed_options:
-                    del options[key]
-            setup_seconds = perf_counter() - start
-            operator_setups += 1
-            if self.solver_config.is_direct:
-                numeric_factorizations += 1
+                self.forms.update_frequency(frequency)
+                shift = self.solver_config.preconditioner_absorption_shift
+                self.forms.set_preconditioner_absorption_shift(shift)
 
-            solutions_at_frequency: dict[str, Any] = {}
-            port_diagnostics: list[PortSolveDiagnostics] = []
-            for excitation in ports:
-                linear_form = self.forms.rhs_form(excitation)
-                rhs = fem_petsc.assemble_vector(linear_form)
-                fem_petsc.apply_lifting(
-                    rhs,
-                    [self.forms.bilinear_form],
-                    bcs=[self.forms.boundary_conditions],
-                )
-                rhs.ghostUpdate(addv=PETSc.InsertMode.ADD, mode=PETSc.ScatterMode.REVERSE)
-                fem_petsc.set_bc(rhs, self.forms.boundary_conditions)
-                solution = fem.Function(
-                    self.function_space,
-                    name=f"E_{excitation.definition.name}_{frequency:g}Hz",
-                )
-                ksp.setConvergenceHistory(reset=True)
                 start = perf_counter()
-                ksp.solve(rhs, solution.x.petsc_vec)
-                solve_seconds = perf_counter() - start
-                solution.x.scatter_forward()
-                rhs_solves += 1
-                reason = int(ksp.getConvergedReason())
-                iterations = int(ksp.getIterationNumber())
-                absolute, relative = petsc_true_relative_residual(
-                    matrix, solution.x.petsc_vec, rhs
+                matrix = fem_petsc.assemble_matrix(
+                    self.forms.bilinear_form, bcs=self.forms.boundary_conditions
                 )
-                history = tuple(float(value) for value in ksp.getConvergenceHistory())
-                if reason <= 0 and self.solver_config.error_if_not_converged:
-                    rhs.destroy()
-                    ksp.destroy()
-                    matrix.destroy()
-                    raise RuntimeError(
-                        f"PETSc failed for {excitation.definition.name} at {frequency:g} Hz: "
-                        f"reason={reason}, iterations={iterations}, "
-                        f"true_relative_residual={relative:.3e}"
+                matrix.assemble()
+                assembly_seconds = perf_counter() - start
+                matrix_assemblies += 1
+                nonzeros, matrix_memory = _matrix_metrics(matrix, comm)
+
+                if shift == 0.0:
+                    # Zero shift has explicit identity semantics and incurs no
+                    # duplicate sparse matrix or assembly.
+                    preconditioner_matrix = matrix
+                    preconditioner_assembly_seconds = 0.0
+                    preconditioner_nonzeros = nonzeros
+                    preconditioner_memory = matrix_memory
+                else:
+                    start = perf_counter()
+                    preconditioner_matrix = fem_petsc.assemble_matrix(
+                        self.forms.preconditioner_bilinear_form,
+                        bcs=self.forms.boundary_conditions,
                     )
-                port_diagnostics.append(
-                    PortSolveDiagnostics(
-                        port_name=excitation.definition.name,
-                        converged_reason=reason,
-                        iterations=iterations,
-                        true_residual_norm=absolute,
-                        true_relative_residual=relative,
-                        reported_residual_history=history,
-                        solve_seconds=solve_seconds,
+                    preconditioner_matrix.assemble()
+                    preconditioner_assembly_seconds = perf_counter() - start
+                    preconditioner_matrix_assemblies += 1
+                    preconditioner_nonzeros, preconditioner_memory = _matrix_metrics(
+                        preconditioner_matrix, comm
+                    )
+
+                ksp, prefix, installed_options = self._configure_ksp(
+                    matrix, preconditioner_matrix
+                )
+                start = perf_counter()
+                try:
+                    # ASM creates nested KSP/PC objects during setup. Keep the
+                    # prefixed options live until those objects consume them.
+                    ksp.setUp()
+                finally:
+                    options = PETSc.Options()
+                    for key in installed_options:
+                        del options[key]
+                setup_seconds = perf_counter() - start
+                operator_setups += 1
+                if self.solver_config.is_direct:
+                    numeric_factorizations += 1
+                hierarchy = inspect_petsc_solver_hierarchy(
+                    ksp, self.solver_config, prefix, comm
+                )
+                validate_effective_solver_hierarchy(
+                    hierarchy, self.solver_config
+                )
+
+                solutions_at_frequency: dict[str, Any] = {}
+                port_diagnostics: list[PortSolveDiagnostics] = []
+                for excitation in ports:
+                    linear_form = self.forms.rhs_form(excitation)
+                    rhs = fem_petsc.assemble_vector(linear_form)
+                    try:
+                        fem_petsc.apply_lifting(
+                            rhs,
+                            [self.forms.bilinear_form],
+                            bcs=[self.forms.boundary_conditions],
+                        )
+                        rhs.ghostUpdate(
+                            addv=PETSc.InsertMode.ADD,
+                            mode=PETSc.ScatterMode.REVERSE,
+                        )
+                        fem_petsc.set_bc(rhs, self.forms.boundary_conditions)
+                        solution = fem.Function(
+                            self.function_space,
+                            name=f"E_{excitation.definition.name}_{frequency:g}Hz",
+                        )
+                        ksp.setConvergenceHistory(reset=True)
+                        start = perf_counter()
+                        ksp.solve(rhs, solution.x.petsc_vec)
+                        solve_seconds = perf_counter() - start
+                        solution.x.scatter_forward()
+                        rhs_solves += 1
+                        reason = int(ksp.getConvergedReason())
+                        iterations = int(ksp.getIterationNumber())
+                        absolute, relative = petsc_true_relative_residual(
+                            matrix, solution.x.petsc_vec, rhs
+                        )
+                        history = tuple(
+                            float(value) for value in ksp.getConvergenceHistory()
+                        )
+                        if reason <= 0 and self.solver_config.error_if_not_converged:
+                            raise RuntimeError(
+                                f"PETSc failed for {excitation.definition.name} "
+                                f"at {frequency:g} Hz: reason={reason}, "
+                                f"iterations={iterations}, "
+                                f"true_relative_residual={relative:.3e}"
+                            )
+                        port_diagnostics.append(
+                            PortSolveDiagnostics(
+                                port_name=excitation.definition.name,
+                                converged_reason=reason,
+                                iterations=iterations,
+                                true_residual_norm=absolute,
+                                true_relative_residual=relative,
+                                reported_residual_history=history,
+                                solve_seconds=solve_seconds,
+                            )
+                        )
+                        if retain_solutions:
+                            solutions_at_frequency[excitation.definition.name] = solution
+                    finally:
+                        rhs.destroy()
+
+                rss_max, rss_sum = _rss_metrics(comm)
+                frequency_diagnostics.append(
+                    FrequencyDiagnostics(
+                        frequency_hz=frequency,
+                        global_complex_dofs=global_dofs,
+                        local_owned_dofs=local_dofs,
+                        matrix_nonzeros=nonzeros,
+                        matrix_memory_bytes_sum=matrix_memory,
+                        preconditioner_absorption_shift=shift,
+                        preconditioner_operator_is_physical=(
+                            preconditioner_matrix is matrix
+                        ),
+                        preconditioner_matrix_nonzeros=preconditioner_nonzeros,
+                        preconditioner_matrix_memory_bytes_sum=preconditioner_memory,
+                        preconditioner_assembly_seconds=preconditioner_assembly_seconds,
+                        rank_peak_rss_bytes_max=rss_max,
+                        rank_peak_rss_bytes_sum=rss_sum,
+                        assembly_seconds=assembly_seconds,
+                        setup_seconds=setup_seconds,
+                        solver_path=self.solver_config.solver_path,
+                        solver_hierarchy=hierarchy,
+                        port_solves=tuple(port_diagnostics),
                     )
                 )
                 if retain_solutions:
-                    solutions_at_frequency[excitation.definition.name] = solution
-                rhs.destroy()
-
-            rss_max, rss_sum = _rss_metrics(comm)
-            frequency_diagnostics.append(
-                FrequencyDiagnostics(
-                    frequency_hz=frequency,
-                    global_complex_dofs=global_dofs,
-                    local_owned_dofs=local_dofs,
-                    matrix_nonzeros=nonzeros,
-                    matrix_memory_bytes_sum=matrix_memory,
-                    rank_peak_rss_bytes_max=rss_max,
-                    rank_peak_rss_bytes_sum=rss_sum,
-                    assembly_seconds=assembly_seconds,
-                    setup_seconds=setup_seconds,
-                    solver_path=self.solver_config.solver_path,
-                    port_solves=tuple(port_diagnostics),
-                )
-            )
-            if retain_solutions:
-                all_solutions[frequency] = solutions_at_frequency
-            ksp.destroy()
-            matrix.destroy()
+                    all_solutions[frequency] = solutions_at_frequency
+            finally:
+                if ksp is not None:
+                    ksp.destroy()
+                if (
+                    preconditioner_matrix is not None
+                    and preconditioner_matrix is not matrix
+                ):
+                    preconditioner_matrix.destroy()
+                if matrix is not None:
+                    matrix.destroy()
 
         return SweepResult(
             solutions=all_solutions,
             diagnostics=tuple(frequency_diagnostics),
             matrix_assemblies=matrix_assemblies,
+            preconditioner_matrix_assemblies=preconditioner_matrix_assemblies,
             operator_setups=operator_setups,
-            numeric_factorizations=numeric_factorizations,
+            global_numeric_factorizations=numeric_factorizations,
             rhs_solves=rhs_solves,
             solver_path=self.solver_config.solver_path,
         )

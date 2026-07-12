@@ -12,6 +12,20 @@ EPSILON_0 = 8.854_187_812_8e-12
 MU_0 = 1.256_637_062_12e-6
 SPEED_OF_LIGHT = 1.0 / (EPSILON_0 * MU_0) ** 0.5
 
+_RESERVED_TOP_LEVEL_PETSC_OPTIONS = frozenset(
+    {
+        "ksp_atol",
+        "ksp_error_if_not_converged",
+        "ksp_max_it",
+        "ksp_pc_side",
+        "ksp_rtol",
+        "ksp_type",
+        "pc_factor_mat_solver_type",
+        "pc_side",
+        "pc_type",
+    }
+)
+
 
 def _finite_complex(value: complex, name: str) -> complex:
     result = complex(value)
@@ -223,6 +237,7 @@ class LinearSolverConfig:
     relative_tolerance: float = 1.0e-10
     absolute_tolerance: float = 1.0e-12
     maximum_iterations: int = 2_000
+    preconditioner_absorption_shift: float = 0.0
     error_if_not_converged: bool = True
     petsc_options: Mapping[str, str | int | float | None] = field(default_factory=dict)
 
@@ -245,16 +260,42 @@ class LinearSolverConfig:
         rtol = float(self.relative_tolerance)
         atol = float(self.absolute_tolerance)
         maximum = int(self.maximum_iterations)
+        absorption_shift = float(self.preconditioner_absorption_shift)
         if not (isfinite(rtol) and isfinite(atol) and rtol > 0 and atol >= 0):
             raise ValueError("solver tolerances must be finite with rtol > 0 and atol >= 0")
         if maximum < 1:
             raise ValueError("maximum_iterations must be positive")
+        if not isfinite(absorption_shift) or absorption_shift < 0:
+            raise ValueError(
+                "preconditioner_absorption_shift must be finite and nonnegative"
+            )
+        if path == "direct" and absorption_shift != 0.0:
+            raise ValueError(
+                "preconditioner_absorption_shift is available only for iterative solvers"
+            )
         object.__setattr__(self, "relative_tolerance", rtol)
         object.__setattr__(self, "absolute_tolerance", atol)
         object.__setattr__(self, "maximum_iterations", maximum)
+        object.__setattr__(
+            self, "preconditioner_absorption_shift", absorption_shift
+        )
+        normalized_options: dict[str, str | int | float | None] = {}
+        for raw_key, value in self.petsc_options.items():
+            key = str(raw_key).strip().lstrip("-").strip().lower()
+            if not key:
+                raise ValueError("PETSc option keys must not be empty")
+            if key in _RESERVED_TOP_LEVEL_PETSC_OPTIONS:
+                raise ValueError(
+                    f"petsc_options may not override typed top-level option {key!r}"
+                )
+            if key in normalized_options:
+                raise ValueError(f"duplicate normalized PETSc option key {key!r}")
+            normalized_options[key] = value
         object.__setattr__(self, "solver_path", path)
         object.__setattr__(self, "preconditioning_side", side)
-        object.__setattr__(self, "petsc_options", MappingProxyType(dict(self.petsc_options)))
+        object.__setattr__(
+            self, "petsc_options", MappingProxyType(normalized_options)
+        )
 
     @property
     def is_direct(self) -> bool:
@@ -315,6 +356,7 @@ class LinearSolverConfig:
             "relative_tolerance": self.relative_tolerance,
             "absolute_tolerance": self.absolute_tolerance,
             "maximum_iterations": self.maximum_iterations,
+            "preconditioner_absorption_shift": self.preconditioner_absorption_shift,
             "error_if_not_converged": self.error_if_not_converged,
             "petsc_options": dict(sorted(self.petsc_options.items())),
         }

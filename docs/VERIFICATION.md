@@ -25,15 +25,25 @@ accuracy, production scaling, or checkpoint/restart behavior.
 ## Identified automated evidence
 
 [GitHub Actions run
+29207223783](https://github.com/HunterSpence/Scatter3D-Codex/actions/runs/29207223783)
+executed revision `c3c1ded041fc6f8bcf768db8a0acefc65647bb7d` and all configured
+repository/static/package, CPython 3.11–3.14, complex DOLFINx, and two-rank MPI
+jobs **PASSED**. Remote exact-revision verification also recorded 109 non-heavy
+tests and 11 heavy non-MPI tests with warnings treated as errors and zero heavy
+skips.
+
+[GitHub Actions run
 29206335149](https://github.com/HunterSpence/Scatter3D-Codex/actions/runs/29206335149)
-executed revision `ad9a43b` in the digest-pinned image and retained the
-`scatter3d-heavy-verification` and `scatter3d-mpi-verification` artifacts.
+retains the earlier numeric manufactured-solution and solver artifacts from
+`ad9a43b`. Those results remain applicable where the exercised code was
+unchanged by the later PETSc option-lifecycle correction.
 
 - **PASSED:** 109 pure tests on each of CPython 3.11, 3.12, 3.13, and 3.14;
   wheel/sdist build, clean installs, CLI checks, static checks, link validation,
   CFF validation, and redacted secret scans.
-- **PASSED:** 10 DOLFINx-heavy tests with zero skips in DOLFINx 0.10.0 and
-  complex128 PETSc 3.24.0.
+- **PASSED:** 11 DOLFINx-heavy tests with zero skips at `c3c1ded` in DOLFINx
+  0.10.0 and complex128 PETSc 3.24.0. The added regression proves nested ASM
+  options remain installed until setup consumes them.
 - **PASSED:** manufactured H(curl) convergence over subdivisions 3, 4, and 6.
   Observed orders were 0.913/0.958 for p=1, 1.902/1.950 for p=2, and
   2.948/2.983 for p=3. The finest p=3 system had 26,298 global complex DoFs;
@@ -48,6 +58,44 @@ executed revision `ad9a43b` in the digest-pinned image and retained the
 The 98-DoF MPI result is a correctness canary only. It is not evidence of
 parallel efficiency, million-DoF capacity, or a memory advantage.
 
+Separate remote scaling runs at `c3c1ded` established the following:
+
+- **PASSED:** p=3 at 86,103 global complex DoFs with right FGMRES, ASM overlap
+  1, and local MUMPS LU. Two RHS converged in 233 and 230 iterations with true
+  relative residuals `9.3958e-9` and `9.9821e-9`.
+- **PASSED:** the identical direct MUMPS reference at 86,103 DoFs, with true
+  relative residuals `9.59e-14` and `9.83e-14`.
+- **FAILED:** peak memory at most 50% of direct on that identical problem. The
+  summed rank process high-water RSS values were `2,544,521,216` iterative and
+  `3,079,335,936` direct bytes, a ratio of `0.8263214111`.
+- **FAILED:** p=3 at 470,928 global complex DoFs. Both RHS reached 1,000
+  iterations; true relative residuals were `2.4996e-7` and `5.5071e-6`.
+
+The exact environment, artifact hashes, option-lifecycle correction, and command
+provenance limitation are recorded in [Distributed solver scaling
+evidence](SCALING_EVIDENCE.md).
+
+## Current development capability boundary
+
+Source changes after `c3c1ded` now implement a separate optional
+absorption-shifted preconditioning matrix `P` and call
+`KSPSetOperators(A, P)` while preserving the physical matrix `A`, right-hand
+sides, and true-residual calculation. Zero shift reuses `A` as `P` without a
+second matrix assembly.
+
+The solver now captures requested and effective PETSc configuration after
+setup. It validates top-level types, factor backend, side, tolerances, and
+iteration cap; aggregates live ASM subdomain solvers across ranks; parses ASM
+type and overlap from the PETSc ASCII view; and retains that raw view. FEM
+validation schema `scatter3d.validation.fem_smoke/v2` adds source/command/image,
+runtime, cgroup, physical-problem, and requested/effective solver provenance,
+with atomic no-clobber output unless `--overwrite` is explicit.
+
+These are source capabilities, not new numerical evidence. No exact-revision
+heavy, MPI, shift sweep, or scaling artifact has yet validated them. Genuine
+coarse correction and the proposed p=3-to-p=1 p-multigrid candidate remain
+**NOT RUN**. All `c3c1ded` **PASSED**/**FAILED** results above are unchanged.
+
 ## Current truth boundary
 
 - The old FEM surface-current RHS is an explicitly uncalibrated load, not a
@@ -56,12 +104,13 @@ parallel efficiency, million-DoF capacity, or a memory advantage.
   their exact-commit software/runtime tests. Incident/outgoing magnetic modal
   extraction, calibrated S-parameters, reciprocity, and an independent thru
   benchmark are **NOT RUN**, so physical port calibration remains unverified.
-- Real POM/PLA VNA reconstruction is **NOT RUN** because no accepted raw repeat
-  bundle and physical-validation artifact have passed this protocol.
+- Real POM/PLA VNA reconstruction is **BLOCKED** because no accepted raw repeat,
+  null, known-target, calibration, coordinate, material, geometry, and protocol
+  bundle has been supplied.
 - Convergence at 3,000,000 or more global complex DoFs is **NOT RUN**.
-- Peak memory at or below 50% of direct on the identical problem is **NOT RUN**.
-  If direct factorization cannot run at 3M on available RAM, the 3M ratio remains
-  **NOT PROVEN** even if a ratio is measured on a smaller common problem.
+- Peak memory at or below 50% of direct on the identical 86,103-DoF problem is
+  **FAILED**. A same-problem comparison at 3,000,000 DoFs is **NOT RUN**; a ratio
+  measured only on a smaller common problem cannot establish the 3M target.
 
 Do not infer a pass from the presence of source or test files. A status becomes
 `PASSED` only when the exact revision, command, environment, and artifact are
@@ -75,7 +124,8 @@ artifacts are committed or archived with a release:
 - the actual four-antenna CAD/mesh and 5–7 GHz production problem;
 - a converged PML reflection, h/p/quadrature, sphere/waveguide, and sensitivity
   finite-difference campaign on that geometry;
-- a production-scale distributed benchmark and memory claim;
+- a distributed convergence result at 3,000,000 or more global complex DoFs;
+- a same-problem memory ratio at 3,000,000 DoFs;
 - VNA calibration quality and cable/thermal stability;
 - measured POM and printed-PLA complex material properties;
 - stationary, motion, reseat, twin-POM, and known-target controls;
@@ -89,7 +139,7 @@ must not be turned into a public success claim.
 
 Before tagging an experimental release, attach or archive:
 
-- [x] green pure, heavy, and MPI jobs on identified revision `ad9a43b`;
+- [x] green pure, heavy, and MPI jobs on identified revision `c3c1ded`;
 - [ ] `git diff --check` and a clean signed/tagged revision;
 - [x] source distribution and wheel built from that revision;
 - [x] container digest and complex-PETSc assertion;
@@ -99,7 +149,10 @@ Before tagging an experimental release, attach or archive:
 - [ ] matched-port accepted-power, incident/outgoing modal extraction,
       reciprocity, and independent transmission-line comparison;
 - [ ] sensitivity finite-difference and linearization-range report;
-- [ ] production scaling/memory report;
+- [x] 86,103- and 470,928-DoF scaling attempts and 86,103-DoF same-problem
+      memory comparison archived with honest **PASSED**/**FAILED** statuses;
+- [ ] convergence at 3,000,000 or more global complex DoFs;
+- [ ] same-problem memory ratio at 3,000,000 DoFs;
 - [ ] raw-input hashes and coordinate/manifests;
 - [ ] complete VNA calibration and independent verification record;
 - [ ] repeat/null/motion/known-target report;

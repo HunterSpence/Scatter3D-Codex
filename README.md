@@ -15,22 +15,35 @@ from that repository was copied.
 
 | Capability | Evidence required by this repository | Claim |
 |---|---|---|
-| Data order, hashes, reference/DUT subtraction | Pure unit and end-to-end synthetic tests on the exact revision | **PASSED** on CPython 3.11–3.14 at `ad9a43b` |
-| Repeat-floor diagnostics and complex TSVD | Pure deterministic tests on the exact revision | **PASSED** at `ad9a43b` |
+| Data order, hashes, reference/DUT subtraction | Pure unit and end-to-end synthetic tests on the exact revision | **PASSED** on CPython 3.11–3.14 at `c3c1ded` |
+| Repeat-floor diagnostics and complex TSVD | Pure deterministic tests on the exact revision | **PASSED** at `c3c1ded` |
 | Manufactured H(curl), Nedelec p=1/2/3 | Three mesh levels per degree in the pinned complex runtime | **PASSED** at `ad9a43b`; archived JSON records orders and residuals |
 | Matched TEM boundary and electric-mode power normalization | Digest-pinned complex DOLFINx tests | Software/runtime checks **PASSED**; calibrated incident/outgoing S-parameter extraction and an independent port benchmark are **NOT RUN** |
-| Two-rank operation | Dedicated MPI test and iterative repeated-RHS smoke solve with zero permitted skips | **PASSED** at `ad9a43b` for the small 98-DoF correctness case; this is not scaling evidence |
-| Real POM/PLA object imaging | Archived VNA repeats, nulls, known target, materials, and acceptance report | **NOT RUN** |
+| Two-rank operation | Dedicated MPI test and iterative repeated-RHS smoke solve with zero permitted skips | **PASSED** at `c3c1ded` for the small 98-DoF correctness case; this is not scaling evidence |
+| p=3 iterative solve at 86,103 global complex DoFs | Two RHS, positive PETSc reasons, and true relative residual at most `1e-7` | **PASSED** at `c3c1ded` with right FGMRES, ASM overlap 1, and local MUMPS LU |
+| p=3 iterative solve at 470,928 global complex DoFs | Same two-RHS residual gate | **FAILED** at `c3c1ded`; both RHS reached 1,000 iterations and residuals were `2.50e-7` and `5.51e-6` |
+| Real POM/PLA object imaging | Archived VNA repeats, nulls, known target, materials, and acceptance report | **BLOCKED** because no accepted raw measurement bundle has been supplied |
 | At least 3,000,000 global complex DoFs | Archived distributed convergence artifact | **NOT RUN** |
-| Peak memory at most 50% of direct | Instrumented identical-problem direct/iterative comparison | **NOT RUN** |
+| Peak memory at most 50% of direct | Instrumented identical-problem direct/iterative comparison | **FAILED** at 86,103 DoFs: summed rank peak RSS ratio `0.8263214111` |
 
 Passing software tests proves the software checks they exercise. It does not
 prove that a particular fixture, calibration, material model, or linearized
 inverse problem contains enough information to image a real object.
 
-The identified evidence is retained by [GitHub Actions run
-29206335149](https://github.com/HunterSpence/Scatter3D-Codex/actions/runs/29206335149)
-as `scatter3d-heavy-verification` and `scatter3d-mpi-verification` artifacts.
+The latest identified automated gates are retained by [GitHub Actions run
+29207223783](https://github.com/HunterSpence/Scatter3D-Codex/actions/runs/29207223783)
+at `c3c1ded`. Earlier manufactured-solution numbers are retained by [run
+29206335149](https://github.com/HunterSpence/Scatter3D-Codex/actions/runs/29206335149).
+The larger remote solver evidence, including failures and SHA-256 hashes, is
+catalogued in [Scaling evidence](docs/SCALING_EVIDENCE.md).
+
+The current development source now separates the physical Maxwell matrix `A`
+from an optional absorption-shifted preconditioning matrix `P` and calls PETSc
+with `KSPSetOperators(A, P)`. It also records and validates the effective PETSc
+hierarchy after setup, rather than treating requested options as proof. These
+changes have not yet acquired an exact-revision heavy or scaling artifact, so
+they do not alter any `c3c1ded` result above. A genuine coarse correction,
+including the proposed p=3-to-p=1 p-multigrid path, remains **NOT RUN**.
 
 ## Why this design
 
@@ -114,6 +127,16 @@ pure-Python job cannot conceal a missing FEM runtime.
   requests `--allow-unmet-discrepancy`.
 - Existing JSON and reconstruction outputs are not overwritten by default;
   `--force` is explicit and recorded in reconstruction provenance.
+- FEM validation JSON uses schema `scatter3d.validation.fem_smoke/v2`, records
+  source, command, image, runtime, cgroup, and physical-problem identities, and
+  refuses to replace an existing artifact unless `--overwrite` is explicit.
+- A nonzero iterative absorption shift changes only the separately assembled
+  preconditioning matrix `P`; the physical matrix `A`, right-hand sides, and
+  recomputed true residual remain unshifted. Zero shift explicitly reuses `A`
+  as `P` without a duplicate matrix assembly.
+- Effective PETSc diagnostics are captured after setup and include the top-level
+  solver, side and tolerances, nested ASM solvers, parsed ASM type/overlap, and
+  the raw PETSc ASCII view. A typed/effective mismatch fails closed.
 - A FEM linear solve is numerically accepted only with a positive PETSc
   convergence reason and a reported true relative residual. This is not, by
   itself, validation of a physical port or an S-parameter.
@@ -164,6 +187,7 @@ docker/                 digest-pinned complex numerical runtime
 - [Data schema](docs/DATA_SCHEMA.md)
 - [CLI workflows](docs/CLI.md)
 - [Verification status and release gate](docs/VERIFICATION.md)
+- [Distributed solver scaling evidence](docs/SCALING_EVIDENCE.md)
 - [Primary references](docs/REFERENCES.md)
 
 ## Scope boundaries
@@ -175,10 +199,10 @@ model; use its residual and null controls to decide when that approximation is
 not credible.
 
 The historical FEM surface-current load is explicitly uncalibrated: it has no
-matched termination, power-wave reference, or S-parameter meaning. A matched
-single-mode TEM boundary and power normalization are being integrated, but the
-heavy tests and incident/outgoing modal extraction required for calibrated
-S-parameters must pass before that path is described as physical validation.
+matched termination, power-wave reference, or S-parameter meaning. The matched
+single-mode TEM boundary and electric-mode power-normalization software checks
+passed at `c3c1ded`, but incident/outgoing magnetic modal extraction, calibrated
+S-parameters, reciprocity, and an independent port benchmark remain **NOT RUN**.
 
 ## License and citation
 

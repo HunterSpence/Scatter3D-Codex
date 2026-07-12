@@ -37,7 +37,9 @@ class MaxwellForms:
     k0: Any
     epsilon_r: Any
     inverse_mu_r: Any
+    preconditioner_absorption_shift: Any
     bilinear_form: Any
+    preconditioner_bilinear_form: Any
     boundary_conditions: list[Any]
     ds: Any
     matched_ports: Mapping[str, PortDefinition]
@@ -82,6 +84,26 @@ class MaxwellForms:
         self.epsilon_r.x.scatter_forward()
         self.inverse_mu_r.x.scatter_forward()
         self._frequency_hz = frequency
+
+    def set_preconditioner_absorption_shift(self, value: float) -> None:
+        """Set the dimensionless artificial loss used only by the P operator.
+
+        With the declared ``exp(-i*omega*t)`` convention, a positive value
+        adds ``+i*value`` to relative permittivity in the preconditioning
+        form.  The physical form, material coefficients, and right-hand sides
+        are not mutated.
+        """
+
+        from math import isfinite
+
+        from petsc4py import PETSc
+
+        shift = float(value)
+        if not isfinite(shift) or shift < 0:
+            raise ValueError(
+                "preconditioner_absorption_shift must be finite and nonnegative"
+            )
+        self.preconditioner_absorption_shift.value = PETSc.ScalarType(shift)
 
     def matched_port_rhs_form(self, excitation: MatchedTEMPortExcitation) -> Any:
         """Compile the inward incident-mode RHS for one configured TEM port.
@@ -229,6 +251,7 @@ def build_maxwell_forms(
     epsilon_r = fem.Function(coefficient_space, name="effective_epsilon_r")
     inverse_mu_r = fem.Function(coefficient_space, name="inverse_mu_r")
     k0 = fem.Constant(mesh, PETSc.ScalarType(1.0))
+    absorption_shift = fem.Constant(mesh, PETSc.ScalarType(0.0))
 
     trial = ufl.TrialFunction(function_space)
     test = ufl.TestFunction(function_space)
@@ -241,8 +264,15 @@ def build_maxwell_forms(
     physical_integrand = ufl.inner(inverse_mu_r * curl_trial, curl_test) - k0**2 * ufl.inner(
         epsilon_r * trial, test
     )
+    shifted_epsilon_r = epsilon_r + PETSc.ScalarType(1j) * absorption_shift
+    preconditioner_integrand = ufl.inner(
+        inverse_mu_r * curl_trial, curl_test
+    ) - k0**2 * ufl.inner(shifted_epsilon_r * trial, test)
     bilinear = _piecewise_integral(
         physical_integrand, dx, tag_contract.volumes.physical_tags
+    )
+    preconditioner_bilinear = _piecewise_integral(
+        preconditioner_integrand, dx, tag_contract.volumes.physical_tags
     )
     if pml_config is not None:
         x = ufl.SpatialCoordinate(mesh)
@@ -251,8 +281,21 @@ def build_maxwell_forms(
         pml_integrand = ufl.inner(
             inverse_mu_r * ufl.dot(inverse_tensor, curl_trial), curl_test
         ) - k0**2 * ufl.inner(epsilon_r * ufl.dot(tensor, trial), test)
+        preconditioner_pml_integrand = ufl.inner(
+            inverse_mu_r * ufl.dot(inverse_tensor, curl_trial), curl_test
+        ) - k0**2 * ufl.inner(
+            shifted_epsilon_r * ufl.dot(tensor, trial), test
+        )
         pml_part = _piecewise_integral(pml_integrand, dx, tag_contract.volumes.pml_tags)
+        preconditioner_pml_part = _piecewise_integral(
+            preconditioner_pml_integrand, dx, tag_contract.volumes.pml_tags
+        )
         bilinear = pml_part if bilinear is None else bilinear + pml_part
+        preconditioner_bilinear = (
+            preconditioner_pml_part
+            if preconditioner_bilinear is None
+            else preconditioner_bilinear + preconditioner_pml_part
+        )
     if bilinear is None:
         raise ValueError("tag contract does not contain any integrable volume tags")
 
@@ -265,6 +308,11 @@ def build_maxwell_forms(
         # Green identity contributes +<n x mu_r^-1 curl(E), v_t>, the Robin
         # contribution to this sign convention is negative imaginary.
         bilinear += (
+            matched_tem_operator_coefficient(k0, port)
+            * ufl.inner(trial_t, test_t)
+            * ds(port.facet_tag)
+        )
+        preconditioner_bilinear += (
             matched_tem_operator_coefficient(k0, port)
             * ufl.inner(trial_t, test_t)
             * ds(port.facet_tag)
@@ -294,7 +342,9 @@ def build_maxwell_forms(
         k0=k0,
         epsilon_r=epsilon_r,
         inverse_mu_r=inverse_mu_r,
+        preconditioner_absorption_shift=absorption_shift,
         bilinear_form=fem.form(bilinear),
+        preconditioner_bilinear_form=fem.form(preconditioner_bilinear),
         boundary_conditions=boundary_conditions,
         ds=ds,
         matched_ports=MappingProxyType(

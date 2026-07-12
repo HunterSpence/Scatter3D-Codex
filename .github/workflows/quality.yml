@@ -9,6 +9,9 @@ on:
 permissions:
   contents: read
 
+env:
+  SCATTER3D_BASE_IMAGE_DIGEST: sha256:f7cce2a2271bf838c080751348c471064acb41fef0330e2c08178a688f71890d
+
 concurrency:
   group: quality-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -198,12 +201,26 @@ jobs:
         with:
           persist-credentials: false
       - name: Build pinned image
-        run: docker build --pull=false -f docker/Dockerfile -t scatter3d-codex:ci .
+        run: >-
+          docker build --pull=false
+          --build-arg SCATTER3D_GIT_COMMIT="${GITHUB_SHA}"
+          --build-arg SCATTER3D_GIT_DIRTY=false
+          -f docker/Dockerfile -t scatter3d-codex:ci .
+      - name: Record local project image identity
+        run: |
+          project_image_id="$(docker image inspect --format '{{.Id}}' scatter3d-codex:ci)"
+          if [[ ! "${project_image_id}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "invalid local project image ID: ${project_image_id}" >&2
+            exit 1
+          fi
+          echo "SCATTER3D_PROJECT_IMAGE_ID=${project_image_id}" >> "${GITHUB_ENV}"
       - name: Run heavy tests and reject skips
         run: |
           mkdir -p "${RUNNER_TEMP}/scatter3d-heavy"
           chmod 0777 "${RUNNER_TEMP}/scatter3d-heavy"
           docker run --rm \
+            --env SCATTER3D_PROJECT_IMAGE_ID \
+            --env SCATTER3D_BASE_IMAGE_DIGEST \
             --volume "${RUNNER_TEMP}/scatter3d-heavy:/artifacts" \
             scatter3d-codex:ci bash -euc '
             python3 -m pytest -p no:cacheprovider -W error -m "heavy and not mpi" -ra --junitxml=/tmp/heavy.xml
@@ -247,12 +264,26 @@ jobs:
         with:
           persist-credentials: false
       - name: Build pinned image
-        run: docker build --pull=false -f docker/Dockerfile -t scatter3d-codex:ci .
+        run: >-
+          docker build --pull=false
+          --build-arg SCATTER3D_GIT_COMMIT="${GITHUB_SHA}"
+          --build-arg SCATTER3D_GIT_DIRTY=false
+          -f docker/Dockerfile -t scatter3d-codex:ci .
+      - name: Record local project image identity
+        run: |
+          project_image_id="$(docker image inspect --format '{{.Id}}' scatter3d-codex:ci)"
+          if [[ ! "${project_image_id}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "invalid local project image ID: ${project_image_id}" >&2
+            exit 1
+          fi
+          echo "SCATTER3D_PROJECT_IMAGE_ID=${project_image_id}" >> "${GITHUB_ENV}"
       - name: Run on two ranks and reject skips
         run: |
           mkdir -p "${RUNNER_TEMP}/scatter3d-mpi"
           chmod 0777 "${RUNNER_TEMP}/scatter3d-mpi"
           docker run --rm --ipc=host \
+            --env SCATTER3D_PROJECT_IMAGE_ID \
+            --env SCATTER3D_BASE_IMAGE_DIGEST \
             --volume "${RUNNER_TEMP}/scatter3d-mpi:/artifacts" \
             scatter3d-codex:ci bash -euc '
             mpirun -n 2 sh -euc '\''
