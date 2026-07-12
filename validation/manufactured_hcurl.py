@@ -36,6 +36,7 @@ def _tag_cube(domain):
 
     tdim = domain.topology.dim
     fdim = tdim - 1
+    domain.topology.create_connectivity(fdim, tdim)
     cell_count = domain.topology.index_map(tdim).size_local
     cell_indices = np.arange(cell_count, dtype=np.int32)
     cell_tags = mesh.meshtags(
