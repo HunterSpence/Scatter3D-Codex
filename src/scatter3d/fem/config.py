@@ -219,6 +219,7 @@ class LinearSolverConfig:
     pc_type: str = "lu"
     factor_solver_type: str | None = "mumps"
     solver_path: str = "direct"
+    preconditioning_side: str = "left"
     relative_tolerance: float = 1.0e-10
     absolute_tolerance: float = 1.0e-12
     maximum_iterations: int = 2_000
@@ -236,6 +237,11 @@ class LinearSolverConfig:
             raise ValueError("direct solver_path requires an LU or Cholesky preconditioner")
         if path == "iterative" and self.pc_type.lower() in factor_types:
             raise ValueError("iterative solver_path forbids LU and Cholesky factorization")
+        side = self.preconditioning_side.lower()
+        if side not in ("left", "right", "symmetric"):
+            raise ValueError(
+                "preconditioning_side must be 'left', 'right', or 'symmetric'"
+            )
         rtol = float(self.relative_tolerance)
         atol = float(self.absolute_tolerance)
         maximum = int(self.maximum_iterations)
@@ -247,6 +253,7 @@ class LinearSolverConfig:
         object.__setattr__(self, "absolute_tolerance", atol)
         object.__setattr__(self, "maximum_iterations", maximum)
         object.__setattr__(self, "solver_path", path)
+        object.__setattr__(self, "preconditioning_side", side)
         object.__setattr__(self, "petsc_options", MappingProxyType(dict(self.petsc_options)))
 
     @property
@@ -284,6 +291,7 @@ class LinearSolverConfig:
             "ksp_type": "fgmres",
             "pc_type": "asm",
             "factor_solver_type": None,
+            "preconditioning_side": "right",
             "relative_tolerance": 1.0e-8,
             "maximum_iterations": 1_000,
             "petsc_options": {
@@ -303,6 +311,7 @@ class LinearSolverConfig:
             "pc_type": self.pc_type,
             "factor_solver_type": self.factor_solver_type,
             "solver_path": self.solver_path,
+            "preconditioning_side": self.preconditioning_side,
             "relative_tolerance": self.relative_tolerance,
             "absolute_tolerance": self.absolute_tolerance,
             "maximum_iterations": self.maximum_iterations,

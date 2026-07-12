@@ -61,6 +61,12 @@ def main() -> int:
     parser.add_argument("--frequencies-hz", type=float, nargs="+", default=(1.0e8, 1.2e8))
     parser.add_argument("--minimum-global-dofs", type=int, default=0)
     parser.add_argument("--maximum-true-relative-residual", type=float, default=1.0e-7)
+    parser.add_argument("--maximum-iterations", type=int, default=1_000)
+    parser.add_argument("--gmres-restart", type=int, default=80)
+    parser.add_argument("--asm-overlap", type=int, default=1)
+    parser.add_argument(
+        "--iterative-local-pc", choices=("ilu", "lu"), default="ilu"
+    )
     parser.add_argument("--compare-direct-json", type=Path)
     parser.add_argument("--maximum-memory-ratio", type=float, default=0.5)
     parser.add_argument("--output", type=Path, required=True)
@@ -73,6 +79,8 @@ def main() -> int:
         parser.error("frequencies must be positive and strictly increasing")
     if args.compare_direct_json and args.solver != "iterative":
         parser.error("--compare-direct-json is meaningful only for the iterative run")
+    if args.maximum_iterations < 1 or args.gmres_restart < 1 or args.asm_overlap < 0:
+        parser.error("iteration/restart counts must be positive and overlap nonnegative")
 
     import dolfinx
     from dolfinx import fem
@@ -102,11 +110,24 @@ def main() -> int:
         VolumeTagContract({"domain": 1}),
         BoundaryTagContract(ports={"left": 10, "right": 11}, pec_tags=(20,)),
     )
-    solver_config = (
-        LinearSolverConfig.direct()
-        if args.solver == "direct"
-        else LinearSolverConfig.iterative_maxwell()
-    )
+    if args.solver == "direct":
+        solver_config = LinearSolverConfig.direct()
+    else:
+        local_options: dict[str, str | int] = {
+            "ksp_gmres_restart": args.gmres_restart,
+            "pc_asm_overlap": args.asm_overlap,
+            "sub_ksp_type": "preonly",
+            "sub_pc_type": args.iterative_local_pc,
+        }
+        if args.iterative_local_pc == "ilu":
+            local_options["sub_pc_factor_levels"] = 0
+        else:
+            local_options["sub_pc_factor_mat_solver_type"] = "mumps"
+        solver_config = LinearSolverConfig.iterative_maxwell(
+            maximum_iterations=args.maximum_iterations,
+            error_if_not_converged=False,
+            petsc_options=local_options,
+        )
     definitions = tuple(
         PortDefinition(
             name,
@@ -166,6 +187,7 @@ def main() -> int:
     payload = {
         "schema": "scatter3d.validation.fem_smoke/v1",
         "solver": args.solver,
+        "solver_config": solver_config.canonical(),
         "degree": args.degree,
         "geometry_order": 1,
         "subdivisions": args.subdivisions,

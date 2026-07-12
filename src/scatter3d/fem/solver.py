@@ -164,6 +164,12 @@ class MaxwellSweepSolver:
         ksp = PETSc.KSP().create(self.forms.mesh.comm)
         ksp.setOperators(matrix)
         ksp.setType(config.ksp_type)
+        side = {
+            "left": PETSc.PC.Side.LEFT,
+            "right": PETSc.PC.Side.RIGHT,
+            "symmetric": PETSc.PC.Side.SYMMETRIC,
+        }[config.preconditioning_side]
+        ksp.setPCSide(side)
         ksp.setTolerances(
             rtol=config.relative_tolerance,
             atol=config.absolute_tolerance,
@@ -189,7 +195,10 @@ class MaxwellSweepSolver:
         for key in installed:
             del options[key]
         if hasattr(ksp, "setErrorIfNotConverged"):
-            ksp.setErrorIfNotConverged(config.error_if_not_converged)
+            # Always preserve PETSc's divergence reason, iteration count, and
+            # true residual. The public flag controls the explicit checked
+            # error below instead of asking PETSc to abort before diagnostics.
+            ksp.setErrorIfNotConverged(False)
         pc.setReusePreconditioner(True)
         ksp.setConvergenceHistory(config.maximum_iterations + 1, reset=True)
         return ksp, prefix, installed

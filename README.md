@@ -15,10 +15,11 @@ from that repository was copied.
 
 | Capability | Evidence required by this repository | Claim |
 |---|---|---|
-| Data order, hashes, reference/DUT subtraction | Pure unit and end-to-end synthetic tests on the exact revision | Implemented; consult the exact-commit CI run for test status |
-| Repeat-floor diagnostics and complex TSVD | Pure deterministic tests on the exact revision | Implemented; consult the exact-commit CI run for test status |
-| Matched TEM boundary, mode normalization, and extraction | Digest-pinned complex DOLFINx tests plus an independent calibrated-port benchmark | **Work in progress; not yet a validated physical/S-parameter port** |
-| Two-rank operation | Dedicated MPI tests with zero permitted skips | **Not established without an exact-commit passing artifact** |
+| Data order, hashes, reference/DUT subtraction | Pure unit and end-to-end synthetic tests on the exact revision | **PASSED** on CPython 3.11–3.14 at `ad9a43b` |
+| Repeat-floor diagnostics and complex TSVD | Pure deterministic tests on the exact revision | **PASSED** at `ad9a43b` |
+| Manufactured H(curl), Nedelec p=1/2/3 | Three mesh levels per degree in the pinned complex runtime | **PASSED** at `ad9a43b`; archived JSON records orders and residuals |
+| Matched TEM boundary and electric-mode power normalization | Digest-pinned complex DOLFINx tests | Software/runtime checks **PASSED**; calibrated incident/outgoing S-parameter extraction and an independent port benchmark are **NOT RUN** |
+| Two-rank operation | Dedicated MPI test and iterative repeated-RHS smoke solve with zero permitted skips | **PASSED** at `ad9a43b` for the small 98-DoF correctness case; this is not scaling evidence |
 | Real POM/PLA object imaging | Archived VNA repeats, nulls, known target, materials, and acceptance report | **NOT RUN** |
 | At least 3,000,000 global complex DoFs | Archived distributed convergence artifact | **NOT RUN** |
 | Peak memory at most 50% of direct | Instrumented identical-problem direct/iterative comparison | **NOT RUN** |
@@ -26,6 +27,10 @@ from that repository was copied.
 Passing software tests proves the software checks they exercise. It does not
 prove that a particular fixture, calibration, material model, or linearized
 inverse problem contains enough information to image a real object.
+
+The identified evidence is retained by [GitHub Actions run
+29206335149](https://github.com/HunterSpence/Scatter3D-Codex/actions/runs/29206335149)
+as `scatter3d-heavy-verification` and `scatter3d-mpi-verification` artifacts.
 
 ## Why this design
 

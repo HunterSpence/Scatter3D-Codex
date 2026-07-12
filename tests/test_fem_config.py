@@ -36,8 +36,11 @@ def test_iterative_preset_cannot_fall_back_to_global_lu() -> None:
     assert config.is_iterative
     assert config.pc_type == "asm"
     assert config.factor_solver_type is None
+    assert config.preconditioning_side == "right"
     with pytest.raises(ValueError, match="forbids LU"):
         LinearSolverConfig(solver_path="iterative", ksp_type="gmres", pc_type="lu")
+    with pytest.raises(ValueError, match="preconditioning_side"):
+        LinearSolverConfig(preconditioning_side="diagonal")
 
 
 def test_reference_and_dut_are_distinct_model_states() -> None:
