@@ -1,0 +1,79 @@
+[build-system]
+requires = ["setuptools==80.9.0", "wheel==0.45.1"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "scatter3d-codex"
+version = "0.1.0"
+description = "Verification-first microwave differential imaging with complex DOLFINx and PETSc"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+authors = [
+  { name = "Hunter Spence" },
+]
+keywords = [
+  "microwave imaging",
+  "inverse scattering",
+  "finite elements",
+  "DOLFINx",
+  "PETSc",
+  "VNA",
+]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Science/Research",
+  "License :: OSI Approved :: Apache Software License",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Scientific/Engineering :: Physics",
+]
+dependencies = [
+  "numpy>=1.26,<3",
+  "scipy>=1.11,<2",
+]
+
+[project.optional-dependencies]
+test = [
+  "build==1.2.2.post1",
+  "pytest==9.0.2",
+  "pytest-cov==7.0.0",
+  "ruff==0.12.3",
+]
+
+[project.scripts]
+scatter3d = "scatter3d.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/HunterSpence/Scatter3D-Codex"
+Documentation = "https://github.com/HunterSpence/Scatter3D-Codex/tree/main/docs"
+Issues = "https://github.com/HunterSpence/Scatter3D-Codex/issues"
+Source = "https://github.com/HunterSpence/Scatter3D-Codex"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+addopts = "--strict-config --strict-markers"
+testpaths = ["tests"]
+markers = [
+  "heavy: requires the digest-pinned complex DOLFINx/PETSc container",
+  "mpi: must execute under mpirun with at least two ranks",
+]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+extend-exclude = ["results", "checkpoints"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = ["S101"]

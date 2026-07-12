@@ -1,0 +1,14 @@
+services:
+  scatter3d:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    image: scatter3d-codex:local
+    working_dir: /work
+    volumes:
+      - ..:/work
+    environment:
+      OMP_NUM_THREADS: "1"
+      MKL_NUM_THREADS: "1"
+      OPENBLAS_NUM_THREADS: "1"
+    command: ["python3", "-m", "pytest", "-m", "heavy", "-ra"]

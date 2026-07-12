@@ -1,0 +1,90 @@
+name: quality
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: quality-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pure-python:
+    name: Pure Python / ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - name: Install
+        run: python -m pip install --upgrade pip && python -m pip install -e ".[test]"
+      - name: Lint
+        run: python -m ruff check .
+      - name: Test pure paths
+        run: python -m pytest -m "not heavy and not mpi" --cov=scatter3d --cov-report=term-missing
+      - name: Build distributions
+        run: python -m build
+
+  heavy-dolfinx:
+    name: Complex DOLFINx heavy tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build pinned image
+        run: docker build -f docker/Dockerfile -t scatter3d-codex:ci .
+      - name: Run heavy tests and reject skips
+        run: |
+          docker run --rm scatter3d-codex:ci bash -euc '
+            python3 -m pytest -m "heavy and not mpi" -ra --junitxml=/tmp/heavy.xml
+            python3 - <<"PY"
+          import xml.etree.ElementTree as ET
+          root = ET.parse("/tmp/heavy.xml").getroot()
+          suites = [root] if root.tag == "testsuite" else list(root.findall("testsuite"))
+          tests = sum(int(s.get("tests", 0)) for s in suites)
+          skipped = sum(int(s.get("skipped", 0)) for s in suites)
+          if tests == 0 or skipped:
+              raise SystemExit(f"heavy verification invalid: tests={tests}, skipped={skipped}")
+          print(f"heavy verification complete: tests={tests}, skipped={skipped}")
+          PY
+          '
+
+  mpi:
+    name: Two-rank MPI tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build pinned image
+        run: docker build -f docker/Dockerfile -t scatter3d-codex:ci .
+      - name: Run on two ranks and reject skips
+        run: |
+          docker run --rm --ipc=host scatter3d-codex:ci bash -euc '
+            mpirun -n 2 sh -euc '\''
+              python3 -m pytest -m mpi -ra --junitxml=/tmp/mpi-${OMPI_COMM_WORLD_RANK}.xml
+            '\''
+            python3 - <<"PY"
+          import glob
+          import xml.etree.ElementTree as ET
+          files = glob.glob("/tmp/mpi-*.xml")
+          if len(files) != 2:
+              raise SystemExit(f"expected two MPI reports, found {files}")
+          for path in files:
+              root = ET.parse(path).getroot()
+              suites = [root] if root.tag == "testsuite" else list(root.findall("testsuite"))
+              tests = sum(int(s.get("tests", 0)) for s in suites)
+              skipped = sum(int(s.get("skipped", 0)) for s in suites)
+              if tests == 0 or skipped:
+                  raise SystemExit(f"MPI verification invalid in {path}: tests={tests}, skipped={skipped}")
+          print("MPI verification complete on two ranks with no skips")
+          PY
+          '

@@ -1,0 +1,19 @@
+cff-version: 1.2.0
+message: "If Scatter3D-Codex supports your work, cite this software and the method papers relevant to your experiment."
+title: "Scatter3D-Codex: verification-first microwave differential imaging"
+type: software
+authors:
+  - family-names: Spence
+    given-names: Hunter
+repository-code: "https://github.com/HunterSpence/Scatter3D-Codex"
+url: "https://github.com/HunterSpence/Scatter3D-Codex"
+license: Apache-2.0
+version: 0.1.0
+date-released: 2026-07-12
+keywords:
+  - microwave imaging
+  - inverse scattering
+  - finite element method
+  - vector network analyzer
+  - DOLFINx
+  - PETSc

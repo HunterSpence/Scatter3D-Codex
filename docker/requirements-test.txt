@@ -1,0 +1,5 @@
+# Test-only packages installed on top of the digest-pinned DOLFINx image.
+# NumPy, SciPy, MPI, PETSc, petsc4py, and DOLFINx come from the base image and
+# are deliberately not replaced by PyPI wheels.
+pytest==9.0.2
+pytest-cov==7.0.0

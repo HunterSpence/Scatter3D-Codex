@@ -1,0 +1,43 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+.Python
+.venv/
+venv/
+.tox/
+.nox/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+coverage.xml
+htmlcov/
+build/
+dist/
+*.egg-info/
+
+# FEM and MPI outputs
+*.bp/
+*.bp4/
+*.bp5/
+*.xdmf
+*.h5
+*.msh
+*.petsc
+checkpoints/
+results/
+
+# Measurement data are intentionally never committed by default
+data/raw/
+data/private/
+*.s[0-9]*p
+*.npz
+!examples/**/*.npz
+
+# Editors and operating systems
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+desktop.ini
