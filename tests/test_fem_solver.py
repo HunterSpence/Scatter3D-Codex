@@ -170,6 +170,26 @@ def test_degree_three_edge_space_builds() -> None:
 
 
 @pytest.mark.heavy
+def test_nested_asm_options_remain_available_through_setup() -> None:
+    pytest.importorskip("dolfinx")
+    from mpi4py import MPI
+    from petsc4py import PETSc
+
+    from scatter3d.fem.config import LinearSolverConfig
+
+    solver, ports = _solver_and_ports(MPI.COMM_SELF, iterative=True)
+    solver.solver_config = LinearSolverConfig.iterative_maxwell(
+        maximum_iterations=1,
+        petsc_options={
+            "sub_ksp_type": "preonly",
+            "sub_pc_type": "scatter3d_deliberately_invalid_pc",
+        },
+    )
+    with pytest.raises(PETSc.Error):
+        solver.solve((1.0e8,), ports, retain_solutions=False)
+
+
+@pytest.mark.heavy
 @pytest.mark.mpi
 def test_iterative_path_is_distributed_and_never_counts_a_factorization() -> None:
     pytest.importorskip("dolfinx")

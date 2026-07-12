@@ -192,8 +192,6 @@ class MaxwellSweepSolver:
             options[key] = value
             installed.append(key)
         ksp.setFromOptions()
-        for key in installed:
-            del options[key]
         if hasattr(ksp, "setErrorIfNotConverged"):
             # Always preserve PETSc's divergence reason, iteration count, and
             # true residual. The public flag controls the explicit checked
@@ -251,9 +249,17 @@ class MaxwellSweepSolver:
             matrix_assemblies += 1
             nonzeros, matrix_memory = _matrix_metrics(matrix, comm)
 
-            ksp, _, _ = self._configure_ksp(matrix)
+            ksp, _, installed_options = self._configure_ksp(matrix)
             start = perf_counter()
-            ksp.setUp()
+            try:
+                # ASM creates its nested KSP/PC objects during setup. Keep the
+                # temporary prefixed options installed until those objects have
+                # consumed them, then remove them from PETSc's global database.
+                ksp.setUp()
+            finally:
+                options = PETSc.Options()
+                for key in installed_options:
+                    del options[key]
             setup_seconds = perf_counter() - start
             operator_setups += 1
             if self.solver_config.is_direct:
