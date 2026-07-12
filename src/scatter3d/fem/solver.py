@@ -428,6 +428,11 @@ class MaxwellSweepSolver:
                 installed.append(key)
             ksp.setFromOptions()
             effective_pc_type = str(pc.getType()).lower()
+            if config.is_iterative and effective_pc_type in {"lu", "cholesky"}:
+                raise RuntimeError(
+                    "iterative PETSc configuration resolved to a global "
+                    f"factorizing PC {effective_pc_type!r} before setup"
+                )
             if effective_pc_type != config.pc_type.lower():
                 raise RuntimeError(
                     "effective PETSc PC changed before nested hierarchy setup: "
@@ -444,11 +449,6 @@ class MaxwellSweepSolver:
                 # until the full outer KSP setup creates ASM subdomain PCs.
                 fine_smoother.setFromOptions()
                 coarse_solver.setFromOptions()
-            if config.is_iterative and effective_pc_type in {"lu", "cholesky"}:
-                raise RuntimeError(
-                    "iterative PETSc configuration resolved to a global "
-                    f"factorizing PC {effective_pc_type!r} before setup"
-                )
         except Exception:
             for key in installed:
                 del options[key]
