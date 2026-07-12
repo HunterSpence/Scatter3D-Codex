@@ -5,7 +5,7 @@ pass. The registered algebraic acceptance condition is a positive PETSc
 convergence reason and a recomputed true relative residual no greater than
 `1e-7` for both independent port right-hand sides.
 
-## Evidence identity
+## Historical one-level evidence identity
 
 | Item | Value |
 |---|---|
@@ -17,10 +17,22 @@ convergence reason and a recomputed true relative residual no greater than
 | PETSc / petsc4py | `3.24.0` |
 | PETSc scalar | `complex128` |
 | MPI | MPICH `4.3.1` |
-| Exact-current CI | [GitHub Actions run 29207223783](https://github.com/HunterSpence/Scatter3D-Codex/actions/runs/29207223783) |
+| Exact historical CI | [GitHub Actions run 29207223783](https://github.com/HunterSpence/Scatter3D-Codex/actions/runs/29207223783) |
 
-The JSON does not retain the command line, Git revision, dirty state, or image
-digest. The final server log archive does retain `/usr/bin/time`'s verbatim
+The later small two-level correctness evidence has a separate identity and does
+not replace the historical scaling artifacts above:
+
+| Item | Value |
+|---|---|
+| Git revision | `bee9e9d3628cc72ef0de2bda69f902629a057e24` |
+| Project image ID | `sha256:2793b3d41da9ddba0d3f2838c6d3d22f7fdf2e66b1f8090548301d49fecdf66e` |
+| Base image digest | `sha256:f7cce2a2271bf838c080751348c471064acb41fef0330e2c08178a688f71890d` |
+| Exact CI | [GitHub Actions run 29212215039](https://github.com/HunterSpence/Scatter3D-Codex/actions/runs/29212215039) |
+| Serial pMG JSON | `fem-smoke-pmg-serial-p3-p1.json`; SHA-256 `b364be215ad0a42a5788aa471305a119f3eb3717afafef0709e37eb88f07d284` |
+| MPI2 pMG JSON | `fem-smoke-pmg-mpi2-p3-p1.json`; SHA-256 `f0a93d119de6b45f9a6093998c9216a556dfad64d8515e211657d1d5d44b3c61` |
+
+The historical c3 scaling JSON files do not retain the command line, Git
+revision, dirty state, or image digest. The final server log archive retains `/usr/bin/time`'s verbatim
 `Command being timed` records. Those commands are reproduced below. Future JSON
 schemas should record the same provenance directly.
 
@@ -82,7 +94,7 @@ values are retained in the JSON.
 The 470,928-DoF run assembled in about `17.89` seconds and did not exhaust its
 28 GiB cgroup limit. Its summed rank peak RSS was `13,988,892,672` bytes and its
 maximum single-rank peak RSS was `1,946,419,200` bytes. Available memory was not
-the acceptance criterion: the algebraic gate failed.
+the acceptance criterion: the algebraic gate **FAILED**.
 
 Process high-water RSS is useful diagnostic evidence, but scheduler or cgroup
 `memory.peak` is preferred for a publication-grade memory claim. No memory ratio
@@ -130,10 +142,24 @@ the next acceptance step. The current development source now keeps the physical
 Maxwell matrix as `A`, can assemble a separate absorption-shifted Maxwell matrix
 as `P`, and calls `KSPSetOperators(A, P)`. It also preserves requested and
 setup-observed PETSc hierarchy, the raw ASCII KSP view, and validation-v2
-provenance. None of those source changes has a new exact-revision heavy or
-scaling artifact, so they do not modify the historical results in this file.
+provenance. Small serial and two-rank p=3-to-p=1 correctness artifacts
+**PASSED** at `bee9e9d` with 1,158 fine and 98 coarse DoFs; they do not modify
+the historical scaling results in this file.
 
-The missing step is a genuine global/coarse correction. The next candidate is
-p=3-to-p=1 Nedelec p-multigrid on the same mesh and physical model; it remains
-**NOT RUN**. Every attempted shift and coarse configuration, including failures,
-must be retained.
+The p=3-to-p=1 Nedelec p-multigrid implementation is now present and its small
+correctness cases **PASSED**. Its registered 86k/471k shift sweep remains
+**NOT RUN**. Every registered shift, including failures, must be retained; no
+scaling claim is made from the small CI cases.
+
+The immutable experiment is
+[`validation/scaling_sweep_v1.json`](../validation/scaling_sweep_v1.json).
+`validation/register_scaling_sweep.py` must write its complete registration
+outside the clean source tree before the first solve.
+`validation/run_registered_scaling_sweep.py --run-id <registered-id>` executes
+one entry without clobbering prior evidence, allowing remaining unstarted run
+IDs to proceed after an interruption.
+Each run records separate stdout/stderr, `fem-smoke.json`, `exit-code.json`, and
+`SHA256SUMS`; the executor binds the complete physical problem, exact DoFs,
+source, images, runtime, 28 GiB no-swap cgroup, host `memory.peak`, and the
+registered 10,800-second wall-time cap. The exact public command sequence is in
+the [README](../README.md#immutable-remote-scaling-sweep).

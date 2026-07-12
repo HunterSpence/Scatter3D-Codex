@@ -1,7 +1,61 @@
 from __future__ import annotations
 
+import json
+import os
+import stat
+import subprocess
+import sys
+from pathlib import Path
+
 import numpy as np
 import pytest
+
+
+@pytest.mark.heavy
+def test_wrong_expected_dof_fails_before_any_rhs_solve(tmp_path: Path) -> None:
+    pytest.importorskip("dolfinx")
+    repository = Path(__file__).resolve().parents[1]
+    output = tmp_path / "wrong-dof-preflight.json"
+    command = [
+        sys.executable,
+        "validation/fem_smoke.py",
+        "--solver",
+        "iterative",
+        "--iterative-hierarchy",
+        "p-multigrid",
+        "--p-multigrid-coarse-degree",
+        "1",
+        "--iterative-local-pc",
+        "lu",
+        "--degree",
+        "3",
+        "--subdivisions",
+        "2",
+        "--frequencies-hz",
+        "1.0e8",
+        "--expected-global-dofs",
+        "1",
+        "--output",
+        str(output),
+    ]
+    completed = subprocess.run(
+        command,
+        cwd=repository,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert completed.returncode == 1, completed.stderr
+    payload = json.loads(output.read_text(encoding="utf-8"))
+    assert payload["status"] == "FAILED"
+    assert payload["passed"] is False
+    assert payload["execution_phase"] == "preflight"
+    assert payload["gates"]["expected_global_dofs"]["status"] == "FAILED"
+    assert payload["gates"]["convergence_and_true_residual"]["status"] == "NOT RUN"
+    assert "rhs_solves" not in payload
+    if os.name == "posix":
+        assert stat.S_IMODE(output.stat().st_mode) == 0o644
 
 
 def test_petsc_asm_view_parser_requires_effective_type_and_overlap() -> None:

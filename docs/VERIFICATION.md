@@ -58,6 +58,44 @@ unchanged by the later PETSc option-lifecycle correction.
 The 98-DoF MPI result is a correctness canary only. It is not evidence of
 parallel efficiency, million-DoF capacity, or a memory advantage.
 
+GitHub Actions run
+[29212215039](https://github.com/HunterSpence/Scatter3D-Codex/actions/runs/29212215039)
+at `bee9e9d3628cc72ef0de2bda69f902629a057e24` added exact-revision two-level
+p=3-to-p=1 p-multigrid correctness evidence:
+
+- **PASSED:** repository/static/package gates, clean wheel/sdist installs,
+  CPython 3.11–3.14 pure jobs, 20 complex DOLFINx-heavy tests with zero skips,
+  and the selected two-rank MPI tests with zero skips.
+
+- **PASSED:** serial, 1,158 fine and 98 coarse complex DoFs, shift `0.5`, two
+  RHS in 6 and 6 iterations, with true relative residuals `1.615e-10` and
+  `1.417e-10`.
+- **PASSED:** two MPI ranks on the identical discrete size, two RHS in 10 and
+  10 iterations, with true relative residuals `1.246e-9` and `1.298e-9`.
+- **PASSED:** both artifacts record `PCUseAmat=false`, one-step
+  Richardson/ASM fine smoothing, local MUMPS LU, a global p=1 MUMPS coarse
+  solve, PEC-masked transfer, and live outer/fine/coarse operator identities.
+- **PASSED:** both artifact SHA-256 manifests verified after download. The
+  serial p-multigrid JSON hash is
+  `b364be215ad0a42a5788aa471305a119f3eb3717afafef0709e37eb88f07d284`
+  and the MPI JSON hash is
+  `f0a93d119de6b45f9a6093998c9216a556dfad64d8515e211657d1d5d44b3c61`.
+
+| Artifact | Exact command inside the pinned image | Actions artifact path | SHA-256 |
+|---|---|---|---|
+| Serial pMG | `python3 validation/fem_smoke.py --solver iterative --iterative-hierarchy p-multigrid --p-multigrid-coarse-degree 1 --preconditioner-absorption-shift 0.5 --iterative-local-pc lu --degree 3 --subdivisions 2 --frequencies-hz 1.0e8 --output /artifacts/fem-smoke-pmg-serial-p3-p1.json` | `scatter3d-heavy-verification-bee9e9d3628cc72ef0de2bda69f902629a057e24/fem-smoke-pmg-serial-p3-p1.json` | `b364be215ad0a42a5788aa471305a119f3eb3717afafef0709e37eb88f07d284` |
+| MPI2 pMG | `mpirun -n 2 python3 validation/fem_smoke.py --solver iterative --iterative-hierarchy p-multigrid --p-multigrid-coarse-degree 1 --preconditioner-absorption-shift 0.5 --iterative-local-pc lu --degree 3 --subdivisions 2 --frequencies-hz 1.0e8 --output /artifacts/fem-smoke-pmg-mpi2-p3-p1.json` | `scatter3d-mpi-verification-bee9e9d3628cc72ef0de2bda69f902629a057e24/fem-smoke-pmg-mpi2-p3-p1.json` | `f0a93d119de6b45f9a6093998c9216a556dfad64d8515e211657d1d5d44b3c61` |
+
+Both used project image ID
+`sha256:2793b3d41da9ddba0d3f2838c6d3d22f7fdf2e66b1f8090548301d49fecdf66e`,
+base digest
+`sha256:f7cce2a2271bf838c080751348c471064acb41fef0330e2c08178a688f71890d`,
+DOLFINx 0.10.0, PETSc/petsc4py 3.24.0 complex128, and MPICH 4.3.1. Actions
+artifacts expire; any release citing these results must attach their JSON and
+`SHA256SUMS` files.
+
+These are small correctness cases, not p-multigrid scaling evidence.
+
 Separate remote scaling runs at `c3c1ded` established the following:
 
 - **PASSED:** p=3 at 86,103 global complex DoFs with right FGMRES, ASM overlap
@@ -91,16 +129,16 @@ validation schema `scatter3d.validation.fem_smoke/v2` adds source/command/image,
 runtime, cgroup, physical-problem, and requested/effective solver provenance,
 with atomic no-clobber output unless `--overwrite` is explicit.
 
-These are source capabilities, not new numerical evidence. No exact-revision
-heavy, MPI, shift sweep, or scaling artifact has yet validated them. Genuine
-coarse correction and the proposed p=3-to-p=1 p-multigrid candidate remain
-**NOT RUN**. All `c3c1ded` **PASSED**/**FAILED** results above are unchanged.
+The exact-revision serial and MPI correctness artifacts above validate the
+two-level software hierarchy at 1,158 fine DoFs. The registered shift sweep at
+86,103 and 470,928 DoFs is **NOT RUN**. All historical `c3c1ded`
+**PASSED**/**FAILED** scaling and memory results above are unchanged.
 
 ## Current truth boundary
 
 - The old FEM surface-current RHS is an explicitly uncalibrated load, not a
   matched physical port and not an S-parameter source or receiver.
-- Matched single-mode TEM forms and electric-mode power normalization passed
+- Matched single-mode TEM forms and electric-mode power normalization **PASSED**
   their exact-commit software/runtime tests. Incident/outgoing magnetic modal
   extraction, calibrated S-parameters, reciprocity, and an independent thru
   benchmark are **NOT RUN**, so physical port calibration remains unverified.
@@ -139,13 +177,15 @@ must not be turned into a public success claim.
 
 Before tagging an experimental release, attach or archive:
 
-- [x] green pure, heavy, and MPI jobs on identified revision `c3c1ded`;
+- [x] green pure, heavy, MPI, package, and static development CI at `bee9e9d`;
+- [ ] green pure, heavy, MPI, package, and static CI on the final release
+      revision;
 - [ ] `git diff --check` and a clean signed/tagged revision;
-- [x] source distribution and wheel built from that revision;
-- [x] container digest and complex-PETSc assertion;
+- [ ] source distribution and wheel built from the final release revision;
+- [ ] final release container identity and complex-PETSc assertion;
 - [ ] manufactured/analytic/PML/discretization convergence report (manufactured
-      p=1/2/3 passed; analytic scattering, PML reflection, and production
-      discretization remain not run);
+      p=1/2/3 **PASSED**; analytic scattering, PML reflection, and production
+      discretization remain **NOT RUN**);
 - [ ] matched-port accepted-power, incident/outgoing modal extraction,
       reciprocity, and independent transmission-line comparison;
 - [ ] sensitivity finite-difference and linearization-range report;

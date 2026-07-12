@@ -233,9 +233,11 @@ load. It has no matched termination, accepted-power normalization, circuit
 reference, incident/outgoing decomposition, or S-parameter meaning and must not
 be used to claim agreement with a VNA port.
 
-A matched single-mode TEM boundary and electric-mode power normalization are in
-progress. Until their digest-pinned heavy tests, independent transmission-line
-oracle, incident/outgoing modal extraction, reciprocity, and accepted-power
-checks pass, label that path **NOT RUN** or **FAILED** as appropriate—not a
-calibrated physical port. Real POM/PLA VNA reconstruction, the 3,000,000-complex-
-DoF solve, and the same-problem 50% memory target remain **NOT RUN**.
+A matched single-mode TEM boundary and electric-mode power-normalization
+software path **PASSED** its digest-pinned runtime tests. Independent
+transmission-line validation, incident/outgoing magnetic modal extraction,
+reciprocity, accepted-power checks, and calibrated physical S-parameters remain
+**NOT RUN**. Real POM/PLA VNA reconstruction is **BLOCKED** because no accepted
+raw measurement/control bundle exists. The 3,000,000-complex-DoF solve is
+**NOT RUN**; the 50% same-problem memory target **FAILED** at 86,103 DoFs and is
+**NOT RUN** at 3,000,000 DoFs.

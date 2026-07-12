@@ -18,6 +18,27 @@ def test_v2_status_and_gate_use_exact_public_vocabulary() -> None:
     assert fem_smoke._gate(False) == {"status": "FAILED", "passed": False}
 
 
+def test_expected_global_dofs_gate_is_exact_or_explicitly_not_run() -> None:
+    assert fem_smoke._expected_global_dofs_gate(86_103, None) == {
+        "status": "NOT RUN",
+        "passed": None,
+        "reason": "--expected-global-dofs was not supplied",
+        "observed": 86_103,
+    }
+    assert fem_smoke._expected_global_dofs_gate(86_103, 86_103) == {
+        "status": "PASSED",
+        "passed": True,
+        "expected": 86_103,
+        "observed": 86_103,
+    }
+    assert fem_smoke._expected_global_dofs_gate(86_104, 86_103) == {
+        "status": "FAILED",
+        "passed": False,
+        "expected": 86_103,
+        "observed": 86_104,
+    }
+
+
 def test_hierarchy_validation_preserves_one_level_default_and_requires_coarse_degree() -> None:
     assert not fem_smoke._validate_hierarchy_configuration(
         solver="iterative",
@@ -253,12 +274,14 @@ def test_image_metadata_rejects_ambiguous_project_identity() -> None:
 def test_cgroup_v2_peak_and_unlimited_limit_are_recorded(tmp_path: Path) -> None:
     (tmp_path / "memory.peak").write_text("12345\n", encoding="utf-8")
     (tmp_path / "memory.max").write_text("max\n", encoding="utf-8")
+    (tmp_path / "memory.swap.max").write_text("0\n", encoding="utf-8")
 
     metadata = fem_smoke._cgroup_memory_metadata(tmp_path)
 
     assert metadata["version"] == "v2"
     assert metadata["peak_bytes"] == 12345
     assert metadata["limit_bytes"] is None
+    assert metadata["swap_limit_bytes"] == 0
     assert metadata["provenance"] == "cgroup_files"
 
 
@@ -267,8 +290,10 @@ def test_cgroup_metadata_does_not_invent_unavailable_values(tmp_path: Path) -> N
         "version": None,
         "peak_bytes": None,
         "limit_bytes": None,
+        "swap_limit_bytes": None,
         "peak_source": None,
         "limit_source": None,
+        "swap_limit_source": None,
         "provenance": "unavailable",
     }
 

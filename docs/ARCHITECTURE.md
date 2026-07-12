@@ -145,11 +145,12 @@ The solver calls `KSPSetOperators(A, P)` and always recomputes the acceptance
 residual with `A`. Zero shift has explicit identity semantics and reuses `A` as
 `P` without a duplicate matrix assembly.
 
-This shifted-P implementation is still a one-level preconditioner. No genuine
-coarse correction has been executed, and the p=3-to-p=1 p-multigrid candidate
-remains **NOT RUN**. Source availability is not convergence evidence; the
-historical `c3c1ded` scaling results remain unchanged until a new exact-revision
-artifact is produced.
+The solver also provides a genuine assembled p=3-to-p=1 two-level correction.
+Small serial and two-rank 1,158-fine/98-coarse-DoF correctness artifacts
+**PASSED** at `bee9e9d`, including shifted fine/coarse operators and live
+hierarchy checks. The registered 86,103- and 470,928-DoF p-multigrid sweep is
+**NOT RUN**; the small canaries are not convergence-at-scale evidence and do not
+alter the historical `c3c1ded` scaling results.
 
 ## Provenance boundary
 

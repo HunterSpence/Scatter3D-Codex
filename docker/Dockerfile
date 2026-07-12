@@ -8,7 +8,9 @@ LABEL org.opencontainers.image.title="Scatter3D-Codex" \
       org.opencontainers.image.description="Complex DOLFINx/PETSc verification runtime" \
       org.opencontainers.image.source="https://github.com/HunterSpence/Scatter3D-Codex" \
       org.opencontainers.image.licenses="Apache-2.0" \
-      org.opencontainers.image.revision="${SCATTER3D_GIT_COMMIT}"
+      org.opencontainers.image.revision="${SCATTER3D_GIT_COMMIT}" \
+      org.opencontainers.image.base.name="dolfinx/dolfinx:v0.10.0" \
+      org.opencontainers.image.base.digest="sha256:f7cce2a2271bf838c080751348c471064acb41fef0330e2c08178a688f71890d"
 
 # Select the complex-scalar installation for non-interactive commands and cap
 # threaded BLAS so MPI ranks do not oversubscribe a workstation or runner.
@@ -67,6 +69,8 @@ metadata = {
     "petsc_scalar_type": str(np.dtype(PETSc.ScalarType)),
     "petsc_version_info": PETSc.Sys.getVersionInfo(),
     "petsc4py": petsc4py.__version__,
+    "petsc_has_hpddm": bool(PETSc.Sys.hasExternalPackage("hpddm")),
+    "petsc_has_slepc": bool(PETSc.Sys.hasExternalPackage("slepc")),
 }
 payload = json.dumps(metadata, indent=2, sort_keys=True)
 Path("/opt/scatter3d/runtime-metadata.json").write_text(payload + "\n", encoding="utf-8")

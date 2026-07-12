@@ -20,6 +20,7 @@ from that repository was copied.
 | Manufactured H(curl), Nedelec p=1/2/3 | Three mesh levels per degree in the pinned complex runtime | **PASSED** at `ad9a43b`; archived JSON records orders and residuals |
 | Matched TEM boundary and electric-mode power normalization | Digest-pinned complex DOLFINx tests | Software/runtime checks **PASSED**; calibrated incident/outgoing S-parameter extraction and an independent port benchmark are **NOT RUN** |
 | Two-rank operation | Dedicated MPI test and iterative repeated-RHS smoke solve with zero permitted skips | **PASSED** at `c3c1ded` for the small 98-DoF correctness case; this is not scaling evidence |
+| Two-level p=3-to-p=1 p-multigrid correctness | Shifted-Pmat serial and two-rank MPI solves with live hierarchy/operator checks | **PASSED** at `bee9e9d`: 1,158 fine DoFs, 98 coarse DoFs, two RHS; this is not scaling evidence |
 | p=3 iterative solve at 86,103 global complex DoFs | Two RHS, positive PETSc reasons, and true relative residual at most `1e-7` | **PASSED** at `c3c1ded` with right FGMRES, ASM overlap 1, and local MUMPS LU |
 | p=3 iterative solve at 470,928 global complex DoFs | Same two-RHS residual gate | **FAILED** at `c3c1ded`; both RHS reached 1,000 iterations and residuals were `2.50e-7` and `5.51e-6` |
 | Real POM/PLA object imaging | Archived VNA repeats, nulls, known target, materials, and acceptance report | **BLOCKED** because no accepted raw measurement bundle has been supplied |
@@ -31,19 +32,18 @@ prove that a particular fixture, calibration, material model, or linearized
 inverse problem contains enough information to image a real object.
 
 The latest identified automated gates are retained by [GitHub Actions run
-29207223783](https://github.com/HunterSpence/Scatter3D-Codex/actions/runs/29207223783)
-at `c3c1ded`. Earlier manufactured-solution numbers are retained by [run
+29212215039](https://github.com/HunterSpence/Scatter3D-Codex/actions/runs/29212215039)
+at `bee9e9d`. Earlier manufactured-solution numbers are retained by [run
 29206335149](https://github.com/HunterSpence/Scatter3D-Codex/actions/runs/29206335149).
 The larger remote solver evidence, including failures and SHA-256 hashes, is
 catalogued in [Scaling evidence](docs/SCALING_EVIDENCE.md).
 
-The current development source now separates the physical Maxwell matrix `A`
-from an optional absorption-shifted preconditioning matrix `P` and calls PETSc
-with `KSPSetOperators(A, P)`. It also records and validates the effective PETSc
-hierarchy after setup, rather than treating requested options as proof. These
-changes have not yet acquired an exact-revision heavy or scaling artifact, so
-they do not alter any `c3c1ded` result above. A genuine coarse correction,
-including the proposed p=3-to-p=1 p-multigrid path, remains **NOT RUN**.
+The current source separates the physical Maxwell matrix `A` from an optional
+absorption-shifted preconditioning matrix `P`, calls `KSPSetOperators(A, P)`,
+and provides an assembled p=3-to-p=1 two-level correction. Exact-revision
+serial and two-rank correctness artifacts **PASSED** at 1,158 fine DoFs. The
+registered 86,103- and 470,928-DoF p-multigrid shift sweep remains **NOT RUN**,
+so no mesh-scalability claim follows from the small correctness cases.
 
 ## Why this design
 
@@ -100,6 +100,52 @@ docker run --rm --ipc=host scatter3d-codex:local \
 
 CI rejects a heavy or MPI job that collects no tests or reports any skip. A green
 pure-Python job cannot conceal a missing FEM runtime.
+
+### Immutable remote scaling sweep
+
+[`validation/scaling_sweep_v1.json`](validation/scaling_sweep_v1.json) fixes the
+eight-run p=3-to-p=1 sweep: two mesh/MPI rungs, four absorption shifts, two port
+right-hand sides, exact DoF gates, a 28 GiB no-swap cgroup, and a 10,800-second
+wall-time cap per run. Create the registration outside the clean source tree
+before the first solve:
+
+```bash
+test -z "$(git status --porcelain --untracked-files=normal)"
+SOURCE_COMMIT=$(git rev-parse HEAD)
+mkdir -p /opt/scatter3d-evidence
+docker build --file docker/Dockerfile \
+  --build-arg SCATTER3D_GIT_COMMIT="$SOURCE_COMMIT" \
+  --build-arg SCATTER3D_GIT_DIRTY=false \
+  --tag scatter3d-codex:bench .
+IMAGE_ID=$(docker image inspect --format '{{.Id}}' scatter3d-codex:bench)
+docker run --rm --entrypoint cat "$IMAGE_ID" \
+  /opt/scatter3d/runtime-metadata.json > /opt/scatter3d-evidence/runtime.json
+python3 validation/register_scaling_sweep.py \
+  --repository . \
+  --project-image-kind local_image_id \
+  --project-image-identity "$IMAGE_ID" \
+  --base-image-digest sha256:f7cce2a2271bf838c080751348c471064acb41fef0330e2c08178a688f71890d \
+  --base-runtime-metadata /opt/scatter3d-evidence/runtime.json \
+  --output /opt/scatter3d-evidence/registration.json
+```
+
+Execute one immutable entry at a time so remaining unstarted entries can proceed
+after an interruption without reusing any existing run directory:
+
+```bash
+python3 validation/run_registered_scaling_sweep.py \
+  --registration /opt/scatter3d-evidence/registration.json \
+  --repository . \
+  --image "$IMAGE_ID" \
+  --output-parent /opt/scatter3d-evidence \
+  --run-id p3-n9-mpi4-shift-0p50
+```
+
+The executor validates source/image/runtime/physical identities, captures the
+host cgroup-v2 peak before container removal, preserves stdout/stderr and honest
+`FAILED` artifacts, publishes `exit-code.json` plus `SHA256SUMS`, and refuses to
+clobber any existing run directory. `--timeout-seconds`, when supplied, must
+equal the registered wall-time cap.
 
 ## Core contracts
 
@@ -201,7 +247,7 @@ not credible.
 The historical FEM surface-current load is explicitly uncalibrated: it has no
 matched termination, power-wave reference, or S-parameter meaning. The matched
 single-mode TEM boundary and electric-mode power-normalization software checks
-passed at `c3c1ded`, but incident/outgoing magnetic modal extraction, calibrated
+**PASSED** at `c3c1ded`, but incident/outgoing magnetic modal extraction, calibrated
 S-parameters, reciprocity, and an independent port benchmark remain **NOT RUN**.
 
 ## License and citation

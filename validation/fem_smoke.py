@@ -171,29 +171,47 @@ def _cgroup_memory_metadata(root: Path = Path("/sys/fs/cgroup")) -> dict[str, An
     """Read cgroup v2 (or legacy v1) peak and limit without claiming availability."""
 
     candidates = (
-        ("v2", root / "memory.peak", root / "memory.max"),
+        (
+            "v2",
+            root / "memory.peak",
+            root / "memory.max",
+            root / "memory.swap.max",
+        ),
         (
             "v1",
             root / "memory" / "memory.max_usage_in_bytes",
             root / "memory" / "memory.limit_in_bytes",
+            None,
         ),
     )
-    for version, peak_path, limit_path in candidates:
+    for version, peak_path, limit_path, swap_limit_path in candidates:
         if peak_path.is_file() or limit_path.is_file():
             return {
                 "version": version,
                 "peak_bytes": _read_cgroup_integer(peak_path),
                 "limit_bytes": _read_cgroup_integer(limit_path),
+                "swap_limit_bytes": (
+                    _read_cgroup_integer(swap_limit_path)
+                    if swap_limit_path is not None
+                    else None
+                ),
                 "peak_source": str(peak_path) if peak_path.is_file() else None,
                 "limit_source": str(limit_path) if limit_path.is_file() else None,
+                "swap_limit_source": (
+                    str(swap_limit_path)
+                    if swap_limit_path is not None and swap_limit_path.is_file()
+                    else None
+                ),
                 "provenance": "cgroup_files",
             }
     return {
         "version": None,
         "peak_bytes": None,
         "limit_bytes": None,
+        "swap_limit_bytes": None,
         "peak_source": None,
         "limit_source": None,
+        "swap_limit_source": None,
         "provenance": "unavailable",
     }
 
@@ -648,6 +666,19 @@ def _p_multigrid_gate(
     return _gate(passed, requested_coarse_degree=coarse_degree)
 
 
+def _expected_global_dofs_gate(
+    observed: int, expected: int | None
+) -> dict[str, Any]:
+    if expected is None:
+        return {
+            "status": "NOT RUN",
+            "passed": None,
+            "reason": "--expected-global-dofs was not supplied",
+            "observed": observed,
+        }
+    return _gate(observed == expected, expected=expected, observed=observed)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--solver", choices=("direct", "iterative"), default="direct")
@@ -655,6 +686,7 @@ def main() -> int:
     parser.add_argument("--subdivisions", type=int, default=3)
     parser.add_argument("--frequencies-hz", type=float, nargs="+", default=(1.0e8, 1.2e8))
     parser.add_argument("--minimum-global-dofs", type=int, default=0)
+    parser.add_argument("--expected-global-dofs", type=int)
     parser.add_argument("--maximum-true-relative-residual", type=float, default=1.0e-7)
     parser.add_argument("--maximum-iterations", type=int, default=1_000)
     parser.add_argument("--gmres-restart", type=int, default=80)
@@ -688,6 +720,10 @@ def main() -> int:
     args = parser.parse_args()
     if args.subdivisions < 1:
         parser.error("subdivisions must be positive")
+    if args.minimum_global_dofs < 0:
+        parser.error("--minimum-global-dofs must be nonnegative")
+    if args.expected_global_dofs is not None and args.expected_global_dofs < 1:
+        parser.error("--expected-global-dofs must be positive")
     if any(value <= 0 for value in args.frequencies_hz) or any(
         b <= a for a, b in zip(args.frequencies_hz, args.frequencies_hz[1:], strict=False)
     ):
@@ -799,6 +835,91 @@ def main() -> int:
         solver_config=solver_config,
         initial_frequency_hz=args.frequencies_hz[0],
     )
+    fine_map = solver.function_space.dofmap.index_map
+    preflight_global_dofs = int(
+        fine_map.size_global * solver.function_space.dofmap.index_map_bs
+    )
+    if (
+        args.expected_global_dofs is not None
+        and preflight_global_dofs != args.expected_global_dofs
+    ):
+        repository = Path(__file__).resolve().parents[1]
+        payload = {
+            "schema": SCHEMA,
+            "status": "FAILED",
+            "passed": False,
+            "execution_phase": "preflight",
+            "source": _git_metadata(repository),
+            "command": _command_metadata(sys.argv),
+            "images": _image_digest_metadata(os.environ),
+            "runtime": _runtime_metadata(dolfinx, PETSc, MPI),
+            "cgroup_memory": _cgroup_memory_metadata(),
+            "physical_problem": _physical_problem_metadata(
+                subdivisions=args.subdivisions,
+                frequencies_hz=args.frequencies_hz,
+                problem_config=problem_config,
+                material_map=material_map,
+                contract=contract,
+                port_definitions=definitions,
+            ),
+            "solver": args.solver,
+            "iterative_hierarchy": (
+                args.iterative_hierarchy if args.solver == "iterative" else None
+            ),
+            "mpi_size": MPI.COMM_WORLD.size,
+            "preconditioner": {
+                "requested_absorption_shift": args.preconditioner_absorption_shift,
+                "requested_hierarchy": (
+                    args.iterative_hierarchy
+                    if args.solver == "iterative"
+                    else None
+                ),
+                "requested_coarse_degree": args.p_multigrid_coarse_degree,
+            },
+            "frequency_diagnostics": [
+                {
+                    "frequency_hz": float(frequency),
+                    "global_complex_dofs": preflight_global_dofs,
+                }
+                for frequency in args.frequencies_hz
+            ],
+            "gates": {
+                "convergence_and_true_residual": {
+                    "status": "NOT RUN",
+                    "passed": None,
+                    "reason": "exact global DoF preflight FAILED before solve",
+                },
+                "assembly_setup_rhs_counts": {
+                    "status": "NOT RUN",
+                    "passed": None,
+                    "reason": "exact global DoF preflight FAILED before solve",
+                },
+                "p_multigrid_structure": {
+                    "status": "NOT RUN",
+                    "passed": None,
+                    "reason": "exact global DoF preflight FAILED before solve",
+                },
+                "minimum_global_dofs": _gate(
+                    preflight_global_dofs >= args.minimum_global_dofs,
+                    requested=args.minimum_global_dofs,
+                    observed=preflight_global_dofs,
+                ),
+                "expected_global_dofs": _expected_global_dofs_gate(
+                    preflight_global_dofs, args.expected_global_dofs
+                ),
+            },
+        }
+        payload["gates"]["release_comparison_provenance"] = (
+            _release_provenance_gate(payload)
+        )
+        if MPI.COMM_WORLD.rank == 0:
+            safe_payload = _json_safe(payload)
+            rendered = json.dumps(
+                safe_payload, indent=2, sort_keys=True, allow_nan=False
+            ) + "\n"
+            print(rendered, end="")
+            _write_payload(safe_payload, args.output, overwrite=args.overwrite)
+        return 1
     excitations = []
     for definition in definitions:
         raw_mode = fem.Function(
@@ -844,6 +965,12 @@ def main() -> int:
     p_multigrid_ok = not uses_p_multigrid or p_multigrid_gate["passed"] is True
     global_dofs = diagnostics[0]["global_complex_dofs"]
     dof_gate = global_dofs >= args.minimum_global_dofs
+    expected_dof_gate = _expected_global_dofs_gate(
+        global_dofs, args.expected_global_dofs
+    )
+    expected_dof_ok = (
+        args.expected_global_dofs is None or expected_dof_gate["passed"] is True
+    )
     requested_solver = {
         "solver": args.solver,
         "iterative_hierarchy": (
@@ -961,6 +1088,7 @@ def main() -> int:
                 requested=args.minimum_global_dofs,
                 observed=global_dofs,
             ),
+            "expected_global_dofs": expected_dof_gate,
         },
     }
     payload["gates"]["release_comparison_provenance"] = _release_provenance_gate(
@@ -999,6 +1127,7 @@ def main() -> int:
         and count_ok
         and p_multigrid_ok
         and dof_gate
+        and expected_dof_ok
         and memory_ratio_ok
     )
     payload["status"] = _status(passed)

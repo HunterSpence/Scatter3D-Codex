@@ -259,16 +259,30 @@ change `A` or any right-hand side, and zero shift explicitly aliases `P` to `A`.
 Validation schema `scatter3d.validation.fem_smoke/v2` records matrix metrics,
 the shift, requested and effective PETSc hierarchy, raw ASCII KSP view,
 provenance, physical-problem identity, and cgroup metadata. It is no-clobber by
-default. This capability has no new exact-revision heavy or scaling result yet
-and therefore does not change the executed `c3c1ded` statuses above.
+default. Exact-revision serial and two-rank p=3-to-p=1 correctness artifacts
+**PASSED** at `bee9e9d` on 1,158 fine and 98 coarse DoFs. They do not change the
+executed `c3c1ded` scaling statuses above.
 
 An absorption shift alone is not a global correction. The 470k failure requires
 a genuine coarse level. The next candidate is p-multigrid from the p=3 Nedelec
 space to an assembled p=1 Nedelec coarse operator on the same mesh and physical
-model. HPDDM remains an alternative only if its required auxiliary matrix and
-SLEPc capabilities are demonstrated in the pinned image. No coarse candidate
-has executed evidence yet, so genuine coarse correction remains **NOT RUN**; do
-not describe a one-level fallback as equivalent.
+model. That two-level candidate has executed small correctness evidence, but
+its registered 86k/471k shift sweep remains **NOT RUN**. HPDDM is **BLOCKED** in
+the pinned image because PETSc lacks its HPDDM backend; it is not an equivalent
+fallback. Do not infer scalability from configuration or the small canaries.
+
+The capability probe is part of `/opt/scatter3d/runtime-metadata.json` in every
+new project image. For the pinned base digest, this exact probe reports both
+values as `false`:
+
+```bash
+python3 -c 'from petsc4py import PETSc; print({name: bool(PETSc.Sys.hasExternalPackage(name)) for name in ("hpddm", "slepc")})'
+# {'hpddm': False, 'slepc': False}
+```
+
+The image build records `petsc_has_hpddm` and `petsc_has_slepc`, and the scaling
+registration hashes that runtime metadata. This makes **BLOCKED** an auditable
+capability result rather than an assumption.
 
 Record setup versus solve time separately. Report global complex degrees of
 freedom, matrix nonzeros/estimated memory, and per-rank RSS high-water max and
@@ -311,4 +325,4 @@ controls pass. At minimum, archive:
 | Scaling | ranks/time/memory table |
 | Experiment | repeat/null/known-target reports |
 
-If a gate was not run, write **NOT RUN**. “Expected to work” is not evidence.
+If a gate has no executed evidence, write **NOT RUN**. “Expected to work” is not evidence.

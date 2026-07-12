@@ -24,9 +24,15 @@ current repository state, not completed hardware or scaling acceptance.
   same-problem memory comparison.
 - A separately assembled absorption-shifted iterative preconditioning operator
   `P`, while preserving the physical Maxwell operator `A` and right-hand sides.
+- A genuine two-level p=3-to-p=1 Nedelec p-multigrid path with a PEC-masked
+  interpolation operator, one-step ASM/MUMPS fine smoothing, and a global
+  p=1 MUMPS coarse correction.
 - Validation schema `scatter3d.validation.fem_smoke/v2` with source, command,
   image, runtime, cgroup, physical-problem, requested/effective solver, and
   preconditioner provenance plus atomic no-clobber output.
+- Immutable eight-run scaling-sweep registration and an independent-per-run Docker
+  executor with exact physical/DoF/image/runtime binding, registered wall time,
+  no-swap enforcement, host cgroup-v2 peak capture, and write-once manifests.
 
 ### Changed
 
@@ -70,9 +76,9 @@ current repository state, not completed hardware or scaling acceptance.
 - The p=3, 470,928-global-complex-DoF iterative rung **FAILED** its registered
   true-residual gate after both right-hand sides reached 1,000 iterations.
 - Convergence at 3,000,000 or more global complex DoFs is **NOT RUN**.
-- Absorption-shift sweeps and a genuine coarse correction, including the
-  proposed p=3-to-p=1 p-multigrid candidate, are **NOT RUN**. The new source
-  capability does not alter the historical `c3c1ded` evidence.
+- Small serial and two-rank p=3-to-p=1 p-multigrid correctness artifacts
+  **PASSED** at `bee9e9d`; the registered 86k/471k absorption-shift sweep is
+  **NOT RUN**. This does not alter the historical `c3c1ded` scaling evidence.
 - Real POM/PLA VNA reconstruction is **BLOCKED** because no accepted raw
   measurement/control bundle has been supplied; no successful real-object image
   is claimed.
