@@ -223,15 +223,16 @@ jobs:
         run: |
           mkdir -p "${RUNNER_TEMP}/scatter3d-heavy"
           chmod 0777 "${RUNNER_TEMP}/scatter3d-heavy"
+          set +e
           docker run --rm \
             --env SCATTER3D_PROJECT_IMAGE_ID \
             --env SCATTER3D_BASE_IMAGE_DIGEST \
             --volume "${RUNNER_TEMP}/scatter3d-heavy:/artifacts" \
             scatter3d-codex:ci bash -euc '
-            python3 -m pytest -p no:cacheprovider -W error -m "heavy and not mpi" -ra --junitxml=/tmp/heavy.xml
+            python3 -m pytest -p no:cacheprovider -W error -m "heavy and not mpi" -ra --junitxml=/artifacts/heavy-junit.xml
             python3 - <<"PY"
           import xml.etree.ElementTree as ET
-          root = ET.parse("/tmp/heavy.xml").getroot()
+          root = ET.parse("/artifacts/heavy-junit.xml").getroot()
           suites = [root] if root.tag == "testsuite" else list(root.findall("testsuite"))
           tests = sum(int(s.get("tests", 0)) for s in suites)
           skipped = sum(int(s.get("skipped", 0)) for s in suites)
@@ -249,13 +250,42 @@ jobs:
               --subdivisions 2 \
               --frequencies-hz 1.0e8 \
               --output /artifacts/fem-smoke-direct-p3.json
+            python3 validation/fem_smoke.py \
+              --solver iterative \
+              --iterative-hierarchy p-multigrid \
+              --p-multigrid-coarse-degree 1 \
+              --preconditioner-absorption-shift 0.5 \
+              --iterative-local-pc lu \
+              --degree 3 \
+              --subdivisions 2 \
+              --frequencies-hz 1.0e8 \
+              --output /artifacts/fem-smoke-pmg-serial-p3-p1.json
             cp /opt/scatter3d/runtime-metadata.json /artifacts/runtime-metadata.json
-          '
+          ' 2>&1 | tee "${RUNNER_TEMP}/scatter3d-heavy/execution.log"
+          pipeline_status=("${PIPESTATUS[@]}")
+          docker_status="${pipeline_status[0]}"
+          tee_status="${pipeline_status[1]}"
+          set -e
+          printf 'docker=%s\ntee=%s\n' "${docker_status}" "${tee_status}" \
+            > "${RUNNER_TEMP}/scatter3d-heavy/pipeline-exit-codes.txt"
+          status="${docker_status}"
+          if [[ "${status}" -eq 0 ]]; then status="${tee_status}"; fi
+          printf '%s\n' "${status}" > "${RUNNER_TEMP}/scatter3d-heavy/exit-code.txt"
+          exit "${status}"
+      - name: Finalize heavy evidence hashes
+        if: always()
+        run: |
+          cd "${RUNNER_TEMP}/scatter3d-heavy"
+          unreadable="$(find . -maxdepth 1 -type f ! -perm -004 -print)"
+          test -z "${unreadable}"
+          find . -maxdepth 1 -type f ! -name SHA256SUMS -printf '%f\0' \
+            | sort -z | xargs -0 -r sha256sum > SHA256SUMS
       - name: Archive heavy verification evidence
+        if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: scatter3d-heavy-verification
-          path: ${{ runner.temp }}/scatter3d-heavy/*.json
+          name: scatter3d-heavy-verification-${{ env.SCATTER3D_SOURCE_SHA }}
+          path: ${{ runner.temp }}/scatter3d-heavy/*
           if-no-files-found: error
           retention-days: 30
 
@@ -287,6 +317,7 @@ jobs:
         run: |
           mkdir -p "${RUNNER_TEMP}/scatter3d-mpi"
           chmod 0777 "${RUNNER_TEMP}/scatter3d-mpi"
+          set +e
           docker run --rm --ipc=host \
             --env SCATTER3D_PROJECT_IMAGE_ID \
             --env SCATTER3D_BASE_IMAGE_DIGEST \
@@ -295,12 +326,12 @@ jobs:
             mpirun -n 2 sh -euc '\''
               rank="${PMI_RANK:-${OMPI_COMM_WORLD_RANK:-}}"
               test -n "${rank}"
-              python3 -m pytest -p no:cacheprovider -W error -m mpi -ra --junitxml="/tmp/mpi-${rank}.xml"
+              python3 -m pytest -p no:cacheprovider -W error -m mpi -ra --junitxml="/artifacts/mpi-${rank}-junit.xml"
             '\''
             python3 - <<"PY"
           import glob
           import xml.etree.ElementTree as ET
-          files = glob.glob("/tmp/mpi-*.xml")
+          files = glob.glob("/artifacts/mpi-*-junit.xml")
           if len(files) != 2:
               raise SystemExit(f"expected two MPI reports, found {files}")
           for path in files:
@@ -318,12 +349,41 @@ jobs:
               --subdivisions 2 \
               --frequencies-hz 1.0e8 \
               --output /artifacts/fem-smoke-iterative-mpi2.json
+            mpirun -n 2 python3 validation/fem_smoke.py \
+              --solver iterative \
+              --iterative-hierarchy p-multigrid \
+              --p-multigrid-coarse-degree 1 \
+              --preconditioner-absorption-shift 0.5 \
+              --iterative-local-pc lu \
+              --degree 3 \
+              --subdivisions 2 \
+              --frequencies-hz 1.0e8 \
+              --output /artifacts/fem-smoke-pmg-mpi2-p3-p1.json
             cp /opt/scatter3d/runtime-metadata.json /artifacts/runtime-metadata.json
-          '
+          ' 2>&1 | tee "${RUNNER_TEMP}/scatter3d-mpi/execution.log"
+          pipeline_status=("${PIPESTATUS[@]}")
+          docker_status="${pipeline_status[0]}"
+          tee_status="${pipeline_status[1]}"
+          set -e
+          printf 'docker=%s\ntee=%s\n' "${docker_status}" "${tee_status}" \
+            > "${RUNNER_TEMP}/scatter3d-mpi/pipeline-exit-codes.txt"
+          status="${docker_status}"
+          if [[ "${status}" -eq 0 ]]; then status="${tee_status}"; fi
+          printf '%s\n' "${status}" > "${RUNNER_TEMP}/scatter3d-mpi/exit-code.txt"
+          exit "${status}"
+      - name: Finalize MPI evidence hashes
+        if: always()
+        run: |
+          cd "${RUNNER_TEMP}/scatter3d-mpi"
+          unreadable="$(find . -maxdepth 1 -type f ! -perm -004 -print)"
+          test -z "${unreadable}"
+          find . -maxdepth 1 -type f ! -name SHA256SUMS -printf '%f\0' \
+            | sort -z | xargs -0 -r sha256sum > SHA256SUMS
       - name: Archive MPI verification evidence
+        if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: scatter3d-mpi-verification
-          path: ${{ runner.temp }}/scatter3d-mpi/*.json
+          name: scatter3d-mpi-verification-${{ env.SCATTER3D_SOURCE_SHA }}
+          path: ${{ runner.temp }}/scatter3d-mpi/*
           if-no-files-found: error
           retention-days: 30

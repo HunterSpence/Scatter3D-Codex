@@ -479,6 +479,175 @@ def _memory_high_water(payload: dict) -> int | None:
     return max(values) if values else None
 
 
+def _validate_hierarchy_configuration(
+    *,
+    solver: str,
+    hierarchy: str,
+    fine_degree: int,
+    coarse_degree: int | None,
+    iterative_local_pc: str | None,
+) -> bool:
+    """Validate solver hierarchy CLI values before importing the FEM runtime."""
+
+    if solver == "direct":
+        if hierarchy != "one-level-asm":
+            raise ValueError("--iterative-hierarchy requires --solver iterative")
+        if coarse_degree is not None:
+            raise ValueError(
+                "--p-multigrid-coarse-degree requires "
+                "--solver iterative --iterative-hierarchy p-multigrid"
+            )
+        return False
+    if hierarchy == "one-level-asm":
+        if coarse_degree is not None:
+            raise ValueError(
+                "--p-multigrid-coarse-degree requires "
+                "--iterative-hierarchy p-multigrid"
+            )
+        return False
+    if coarse_degree is None:
+        raise ValueError(
+            "--iterative-hierarchy p-multigrid requires "
+            "--p-multigrid-coarse-degree"
+        )
+    if coarse_degree >= fine_degree:
+        raise ValueError("p-multigrid coarse degree must be lower than --degree")
+    if iterative_local_pc not in (None, "lu"):
+        raise ValueError(
+            "p-multigrid uses the verified fine ASM local LU/MUMPS path; "
+            "--iterative-local-pc must be omitted or set to lu"
+        )
+    return True
+
+
+def _expected_solver_counts(
+    *,
+    frequencies: int,
+    ports: int,
+    solver: str,
+    uses_p_multigrid: bool,
+    absorption_shift: float,
+) -> dict[str, int]:
+    return {
+        "matrix_assemblies": frequencies,
+        "preconditioner_matrix_assemblies": (
+            frequencies
+            if solver == "iterative" and absorption_shift != 0.0
+            else 0
+        ),
+        "coarse_preconditioner_matrix_assemblies": (
+            frequencies if uses_p_multigrid else 0
+        ),
+        "transfer_operator_assemblies": 1 if uses_p_multigrid else 0,
+        "operator_setups": frequencies,
+        "global_numeric_factorizations": frequencies if solver == "direct" else 0,
+        "coarse_global_factorizations": frequencies if uses_p_multigrid else 0,
+        "rhs_solves": frequencies * ports,
+    }
+
+
+def _observed_solver_counts(result: Any) -> dict[str, int]:
+    return {
+        key: int(getattr(result, key))
+        for key in (
+            "matrix_assemblies",
+            "preconditioner_matrix_assemblies",
+            "coarse_preconditioner_matrix_assemblies",
+            "transfer_operator_assemblies",
+            "operator_setups",
+            "global_numeric_factorizations",
+            "coarse_global_factorizations",
+            "rhs_solves",
+        )
+    }
+
+
+def _p_multigrid_gate(
+    diagnostics: Sequence[Mapping[str, Any]],
+    *,
+    enabled: bool,
+    coarse_degree: int | None,
+    asm_overlap: int = 1,
+) -> dict[str, Any]:
+    if not enabled:
+        return {
+            "status": "NOT RUN",
+            "passed": None,
+            "reason": "--iterative-hierarchy p-multigrid was not selected",
+        }
+    def effective_hierarchy_ok(item: Mapping[str, Any]) -> bool:
+        hierarchy = item.get("solver_hierarchy")
+        if not isinstance(hierarchy, Mapping):
+            return False
+        effective = hierarchy.get("effective")
+        if not isinstance(effective, Mapping):
+            return False
+        top = effective.get("top_level")
+        fine = effective.get("mg_fine_smoother")
+        coarse = effective.get("mg_coarse_solver")
+        subdomains = effective.get("mg_fine_asm_subdomain_solvers")
+        return (
+            isinstance(top, Mapping)
+            and top.get("ksp_type") == "fgmres"
+            and top.get("pc_type") == "mg"
+            and effective.get("preconditioning_side") == "right"
+            and effective.get("pc_uses_amat") is False
+            and effective.get("mg_levels") == 2
+            and effective.get("mg_type") == "multiplicative"
+            and effective.get("mg_cycle_type") == "v"
+            and effective.get("mg_galerkin") == "none"
+            and isinstance(fine, Mapping)
+            and fine.get("ksp_type") == "richardson"
+            and fine.get("pc_type") == "asm"
+            and fine.get("maximum_iterations") == 1
+            and fine.get("norm_type") == "none"
+            and effective.get("mg_fine_asm_type") == "restrict"
+            and effective.get("mg_fine_asm_overlap") == asm_overlap
+            and isinstance(subdomains, Sequence)
+            and bool(subdomains)
+            and all(
+                isinstance(component, Mapping)
+                and component.get("ksp_type") == "preonly"
+                and component.get("pc_type") == "lu"
+                and component.get("factor_solver_type") == "mumps"
+                for component in subdomains
+            )
+            and isinstance(coarse, Mapping)
+            and coarse.get("ksp_type") == "preonly"
+            and coarse.get("pc_type") == "lu"
+            and coarse.get("factor_solver_type") == "mumps"
+        )
+
+    passed = bool(diagnostics) and all(
+        item.get("coarse_degree") == coarse_degree
+        and isinstance(item.get("coarse_global_complex_dofs"), int)
+        and item["coarse_global_complex_dofs"] > 0
+        and item["coarse_global_complex_dofs"] < item.get("global_complex_dofs", 0)
+        and isinstance(item.get("coarse_preconditioner_matrix_nonzeros"), int)
+        and item["coarse_preconditioner_matrix_nonzeros"] > 0
+        and item.get("p_multigrid_operator_checks_passed") is True
+        and isinstance(item.get("transfer_operator"), Mapping)
+        and item["transfer_operator"].get("direction") == "coarse_to_fine"
+        and item["transfer_operator"].get("rows") == item.get("global_complex_dofs")
+        and item["transfer_operator"].get("columns")
+        == item.get("coarse_global_complex_dofs")
+        and isinstance(item["transfer_operator"].get("nonzeros"), int)
+        and item["transfer_operator"]["nonzeros"] > 0
+        and isinstance(
+            item["transfer_operator"].get("constrained_fine_rows"), int
+        )
+        and item["transfer_operator"]["constrained_fine_rows"] > 0
+        and isinstance(
+            item["transfer_operator"].get("constrained_coarse_columns"), int
+        )
+        and item["transfer_operator"]["constrained_coarse_columns"] > 0
+        and item["transfer_operator"].get("maximum_imaginary_abs") == 0.0
+        and effective_hierarchy_ok(item)
+        for item in diagnostics
+    )
+    return _gate(passed, requested_coarse_degree=coarse_degree)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--solver", choices=("direct", "iterative"), default="direct")
@@ -491,14 +660,23 @@ def main() -> int:
     parser.add_argument("--gmres-restart", type=int, default=80)
     parser.add_argument("--asm-overlap", type=int, default=1)
     parser.add_argument(
+        "--iterative-hierarchy",
+        choices=("one-level-asm", "p-multigrid"),
+        default="one-level-asm",
+    )
+    parser.add_argument(
+        "--p-multigrid-coarse-degree",
+        type=int,
+        choices=(1, 2),
+        help="explicit assembled low-order degree for the p-multigrid coarse level",
+    )
+    parser.add_argument(
         "--preconditioner-absorption-shift",
         type=float,
         default=0.0,
         help="nonnegative absorption shift applied only to the iterative P matrix",
     )
-    parser.add_argument(
-        "--iterative-local-pc", choices=("ilu", "lu"), default="ilu"
-    )
+    parser.add_argument("--iterative-local-pc", choices=("ilu", "lu"))
     parser.add_argument("--compare-direct-json", type=Path)
     parser.add_argument("--maximum-memory-ratio", type=float, default=0.5)
     parser.add_argument("--output", type=Path, required=True)
@@ -525,6 +703,16 @@ def main() -> int:
         parser.error("--preconditioner-absorption-shift must be finite and nonnegative")
     if args.solver == "direct" and args.preconditioner_absorption_shift != 0.0:
         parser.error("--preconditioner-absorption-shift requires --solver iterative")
+    try:
+        uses_p_multigrid = _validate_hierarchy_configuration(
+            solver=args.solver,
+            hierarchy=args.iterative_hierarchy,
+            fine_degree=args.degree,
+            coarse_degree=args.p_multigrid_coarse_degree,
+            iterative_local_pc=args.iterative_local_pc,
+        )
+    except ValueError as exc:
+        parser.error(str(exc))
     if args.output.exists() and not args.overwrite:
         parser.error(f"refusing to overwrite existing artifact: {args.output.resolve()}")
 
@@ -558,14 +746,26 @@ def main() -> int:
     )
     if args.solver == "direct":
         solver_config = LinearSolverConfig.direct()
+    elif uses_p_multigrid:
+        solver_config = LinearSolverConfig.iterative_p_multigrid(
+            coarse_degree=args.p_multigrid_coarse_degree,
+            maximum_iterations=args.maximum_iterations,
+            preconditioner_absorption_shift=args.preconditioner_absorption_shift,
+            error_if_not_converged=False,
+            petsc_options={
+                "ksp_gmres_restart": args.gmres_restart,
+                "mg_levels_1_pc_asm_overlap": args.asm_overlap,
+            },
+        )
     else:
+        iterative_local_pc = args.iterative_local_pc or "ilu"
         local_options: dict[str, str | int] = {
             "ksp_gmres_restart": args.gmres_restart,
             "pc_asm_overlap": args.asm_overlap,
             "sub_ksp_type": "preonly",
-            "sub_pc_type": args.iterative_local_pc,
+            "sub_pc_type": iterative_local_pc,
         }
-        if args.iterative_local_pc == "ilu":
+        if iterative_local_pc == "ilu":
             local_options["sub_pc_factor_levels"] = 0
         else:
             local_options["sub_pc_factor_mat_solver_type"] = "mumps"
@@ -626,24 +826,29 @@ def main() -> int:
         for frequency in diagnostics
         for port in frequency["port_solves"]
     )
-    count_ok = (
-        result.matrix_assemblies == len(args.frequencies_hz)
-        and result.preconditioner_matrix_assemblies
-        == (
-            len(args.frequencies_hz)
-            if args.solver == "iterative"
-            and args.preconditioner_absorption_shift != 0.0
-            else 0
-        )
-        and result.operator_setups == len(args.frequencies_hz)
-        and result.rhs_solves == len(args.frequencies_hz) * len(excitations)
-        and result.global_numeric_factorizations
-        == (len(args.frequencies_hz) if args.solver == "direct" else 0)
+    expected_counts = _expected_solver_counts(
+        frequencies=len(args.frequencies_hz),
+        ports=len(excitations),
+        solver=args.solver,
+        uses_p_multigrid=uses_p_multigrid,
+        absorption_shift=args.preconditioner_absorption_shift,
     )
+    observed_counts = _observed_solver_counts(result)
+    count_ok = observed_counts == expected_counts
+    p_multigrid_gate = _p_multigrid_gate(
+        diagnostics,
+        enabled=uses_p_multigrid,
+        coarse_degree=args.p_multigrid_coarse_degree,
+        asm_overlap=args.asm_overlap,
+    )
+    p_multigrid_ok = not uses_p_multigrid or p_multigrid_gate["passed"] is True
     global_dofs = diagnostics[0]["global_complex_dofs"]
     dof_gate = global_dofs >= args.minimum_global_dofs
     requested_solver = {
         "solver": args.solver,
+        "iterative_hierarchy": (
+            args.iterative_hierarchy if args.solver == "iterative" else None
+        ),
         **solver_config.canonical(),
     }
     effective_solver = [
@@ -663,6 +868,23 @@ def main() -> int:
                 "preconditioner_matrix_memory_bytes_sum"
             ],
             "assembly_seconds": item["preconditioner_assembly_seconds"],
+            "coarse": {
+                "degree": item["coarse_degree"],
+                "global_complex_dofs": item["coarse_global_complex_dofs"],
+                "matrix_nonzeros": item[
+                    "coarse_preconditioner_matrix_nonzeros"
+                ],
+                "matrix_memory_bytes_sum": item[
+                    "coarse_preconditioner_matrix_memory_bytes_sum"
+                ],
+                "assembly_seconds": item[
+                    "coarse_preconditioner_assembly_seconds"
+                ],
+            },
+            "transfer_operator": item["transfer_operator"],
+            "p_multigrid_operator_checks_passed": item[
+                "p_multigrid_operator_checks_passed"
+            ],
         }
         for item in diagnostics
     ]
@@ -685,6 +907,9 @@ def main() -> int:
             port_definitions=definitions,
         ),
         "solver": args.solver,
+        "iterative_hierarchy": (
+            args.iterative_hierarchy if args.solver == "iterative" else None
+        ),
         # Retained as an explicit compatibility alias for v1 artifact readers.
         "solver_config": solver_config.canonical(),
         "solver_configuration": {
@@ -701,13 +926,22 @@ def main() -> int:
         "scalar_type": str(PETSc.ScalarType),
         "matrix_assemblies": result.matrix_assemblies,
         "preconditioner_matrix_assemblies": result.preconditioner_matrix_assemblies,
+        "coarse_preconditioner_matrix_assemblies": (
+            result.coarse_preconditioner_matrix_assemblies
+        ),
+        "transfer_operator_assemblies": result.transfer_operator_assemblies,
         "operator_setups": result.operator_setups,
         "global_numeric_factorizations": result.global_numeric_factorizations,
+        "coarse_global_factorizations": result.coarse_global_factorizations,
         # Backward-compatible v1 alias. This never includes ASM-local factors.
         "numeric_factorizations": result.global_numeric_factorizations,
         "rhs_solves": result.rhs_solves,
         "preconditioner": {
             "requested_absorption_shift": args.preconditioner_absorption_shift,
+            "requested_hierarchy": (
+                args.iterative_hierarchy if args.solver == "iterative" else None
+            ),
+            "requested_coarse_degree": args.p_multigrid_coarse_degree,
             "per_frequency": preconditioner_metrics,
         },
         "frequency_diagnostics": diagnostics,
@@ -716,7 +950,12 @@ def main() -> int:
                 convergence_ok,
                 maximum_true_relative_residual=args.maximum_true_relative_residual,
             ),
-            "assembly_setup_rhs_counts": _gate(count_ok),
+            "assembly_setup_rhs_counts": _gate(
+                count_ok,
+                expected=expected_counts,
+                observed=observed_counts,
+            ),
+            "p_multigrid_structure": p_multigrid_gate,
             "minimum_global_dofs": _gate(
                 dof_gate,
                 requested=args.minimum_global_dofs,
@@ -755,7 +994,13 @@ def main() -> int:
             "reason": "--compare-direct-json was not supplied",
         }
 
-    passed = convergence_ok and count_ok and dof_gate and memory_ratio_ok
+    passed = (
+        convergence_ok
+        and count_ok
+        and p_multigrid_ok
+        and dof_gate
+        and memory_ratio_ok
+    )
     payload["status"] = _status(passed)
     payload["passed"] = passed
     if MPI.COMM_WORLD.rank == 0:

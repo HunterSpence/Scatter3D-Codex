@@ -5,6 +5,7 @@ import json
 import os
 import stat
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -15,6 +16,187 @@ def test_v2_status_and_gate_use_exact_public_vocabulary() -> None:
     assert fem_smoke.SCHEMA == "scatter3d.validation.fem_smoke/v2"
     assert fem_smoke._gate(True) == {"status": "PASSED", "passed": True}
     assert fem_smoke._gate(False) == {"status": "FAILED", "passed": False}
+
+
+def test_hierarchy_validation_preserves_one_level_default_and_requires_coarse_degree() -> None:
+    assert not fem_smoke._validate_hierarchy_configuration(
+        solver="iterative",
+        hierarchy="one-level-asm",
+        fine_degree=3,
+        coarse_degree=None,
+        iterative_local_pc=None,
+    )
+    assert fem_smoke._validate_hierarchy_configuration(
+        solver="iterative",
+        hierarchy="p-multigrid",
+        fine_degree=3,
+        coarse_degree=1,
+        iterative_local_pc="lu",
+    )
+    invalid = (
+        {
+            "solver": "direct",
+            "hierarchy": "p-multigrid",
+            "fine_degree": 3,
+            "coarse_degree": 1,
+            "iterative_local_pc": None,
+        },
+        {
+            "solver": "iterative",
+            "hierarchy": "one-level-asm",
+            "fine_degree": 3,
+            "coarse_degree": 1,
+            "iterative_local_pc": None,
+        },
+        {
+            "solver": "iterative",
+            "hierarchy": "p-multigrid",
+            "fine_degree": 3,
+            "coarse_degree": None,
+            "iterative_local_pc": None,
+        },
+        {
+            "solver": "iterative",
+            "hierarchy": "p-multigrid",
+            "fine_degree": 2,
+            "coarse_degree": 2,
+            "iterative_local_pc": None,
+        },
+        {
+            "solver": "iterative",
+            "hierarchy": "p-multigrid",
+            "fine_degree": 3,
+            "coarse_degree": 1,
+            "iterative_local_pc": "ilu",
+        },
+    )
+    for values in invalid:
+        with pytest.raises(ValueError):
+            fem_smoke._validate_hierarchy_configuration(**values)
+
+
+def test_solver_counts_are_hierarchy_aware() -> None:
+    direct = fem_smoke._expected_solver_counts(
+        frequencies=2,
+        ports=2,
+        solver="direct",
+        uses_p_multigrid=False,
+        absorption_shift=0.0,
+    )
+    assert direct["global_numeric_factorizations"] == 2
+    assert direct["coarse_global_factorizations"] == 0
+    assert direct["transfer_operator_assemblies"] == 0
+
+    one_level = fem_smoke._expected_solver_counts(
+        frequencies=2,
+        ports=2,
+        solver="iterative",
+        uses_p_multigrid=False,
+        absorption_shift=0.5,
+    )
+    assert one_level["preconditioner_matrix_assemblies"] == 2
+    assert one_level["coarse_preconditioner_matrix_assemblies"] == 0
+
+    p_multigrid = fem_smoke._expected_solver_counts(
+        frequencies=2,
+        ports=2,
+        solver="iterative",
+        uses_p_multigrid=True,
+        absorption_shift=0.5,
+    )
+    assert p_multigrid == {
+        "matrix_assemblies": 2,
+        "preconditioner_matrix_assemblies": 2,
+        "coarse_preconditioner_matrix_assemblies": 2,
+        "transfer_operator_assemblies": 1,
+        "operator_setups": 2,
+        "global_numeric_factorizations": 0,
+        "coarse_global_factorizations": 2,
+        "rhs_solves": 4,
+    }
+    assert fem_smoke._observed_solver_counts(SimpleNamespace(**p_multigrid)) == p_multigrid
+
+
+def test_p_multigrid_gate_is_not_run_outside_hierarchy_and_checks_transfer() -> None:
+    not_run = fem_smoke._p_multigrid_gate(
+        (), enabled=False, coarse_degree=None
+    )
+    assert not_run["status"] == "NOT RUN"
+    assert not_run["passed"] is None
+
+    diagnostic = {
+        "global_complex_dofs": 1_158,
+        "coarse_degree": 1,
+        "coarse_global_complex_dofs": 98,
+        "coarse_preconditioner_matrix_nonzeros": 1_024,
+        "p_multigrid_operator_checks_passed": True,
+        "transfer_operator": {
+            "direction": "coarse_to_fine",
+            "rows": 1_158,
+            "columns": 98,
+            "nonzeros": 2_048,
+            "constrained_fine_rows": 48,
+            "constrained_coarse_columns": 12,
+            "maximum_imaginary_abs": 0.0,
+        },
+        "solver_hierarchy": {
+            "effective": {
+                "preconditioning_side": "right",
+                "pc_uses_amat": False,
+                "top_level": {"ksp_type": "fgmres", "pc_type": "mg"},
+                "mg_levels": 2,
+                "mg_type": "multiplicative",
+                "mg_cycle_type": "v",
+                "mg_galerkin": "none",
+                "mg_fine_smoother": {
+                    "ksp_type": "richardson",
+                    "pc_type": "asm",
+                    "maximum_iterations": 1,
+                    "norm_type": "none",
+                },
+                "mg_fine_asm_type": "restrict",
+                "mg_fine_asm_overlap": 1,
+                "mg_fine_asm_subdomain_solvers": [
+                    {
+                        "ksp_type": "preonly",
+                        "pc_type": "lu",
+                        "factor_solver_type": "mumps",
+                    }
+                ],
+                "mg_coarse_solver": {
+                    "ksp_type": "preonly",
+                    "pc_type": "lu",
+                    "factor_solver_type": "mumps",
+                },
+            }
+        },
+    }
+    passed = fem_smoke._p_multigrid_gate(
+        (diagnostic,), enabled=True, coarse_degree=1
+    )
+    assert passed["status"] == "PASSED"
+    assert passed["passed"] is True
+
+    diagnostic["transfer_operator"]["columns"] = 99
+    failed = fem_smoke._p_multigrid_gate(
+        (diagnostic,), enabled=True, coarse_degree=1
+    )
+    assert failed["status"] == "FAILED"
+    assert failed["passed"] is False
+
+    diagnostic["transfer_operator"]["columns"] = 98
+    diagnostic["solver_hierarchy"]["effective"]["pc_uses_amat"] = True
+    failed_hierarchy = fem_smoke._p_multigrid_gate(
+        (diagnostic,), enabled=True, coarse_degree=1
+    )
+    assert failed_hierarchy["status"] == "FAILED"
+
+    diagnostic["solver_hierarchy"]["effective"]["pc_uses_amat"] = False
+    diagnostic["transfer_operator"]["constrained_fine_rows"] = 0
+    failed_mask = fem_smoke._p_multigrid_gate(
+        (diagnostic,), enabled=True, coarse_degree=1
+    )
+    assert failed_mask["status"] == "FAILED"
 
 
 def test_image_digests_are_explicitly_sourced_or_null() -> None:
