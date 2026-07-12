@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import copy
 import json
+import os
+import stat
 from pathlib import Path
 
 import pytest
@@ -302,3 +304,10 @@ def test_artifact_write_is_atomic_no_clobber_by_default(tmp_path: Path) -> None:
 
     fem_smoke._write_payload({"status": "PASSED"}, output, overwrite=True)
     assert json.loads(output.read_text(encoding="utf-8"))["status"] == "PASSED"
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX artifact mode contract")
+def test_completed_validation_artifact_is_publicly_readable(tmp_path: Path) -> None:
+    output = tmp_path / "public-evidence.json"
+    fem_smoke._write_payload({"status": "PASSED"}, output)
+    assert stat.S_IMODE(output.stat().st_mode) == 0o644

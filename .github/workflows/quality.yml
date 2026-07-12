@@ -11,6 +11,7 @@ permissions:
 
 env:
   SCATTER3D_BASE_IMAGE_DIGEST: sha256:f7cce2a2271bf838c080751348c471064acb41fef0330e2c08178a688f71890d
+  SCATTER3D_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
 
 concurrency:
   group: quality-${{ github.workflow }}-${{ github.ref }}
@@ -30,6 +31,7 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+          ref: ${{ env.SCATTER3D_SOURCE_SHA }}
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: "3.12"
@@ -136,6 +138,7 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
+          ref: ${{ env.SCATTER3D_SOURCE_SHA }}
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: ${{ matrix.python-version }}
@@ -162,6 +165,7 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
+          ref: ${{ env.SCATTER3D_SOURCE_SHA }}
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: "3.12"
@@ -200,10 +204,11 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
+          ref: ${{ env.SCATTER3D_SOURCE_SHA }}
       - name: Build pinned image
         run: >-
           docker build --pull=false
-          --build-arg SCATTER3D_GIT_COMMIT="${GITHUB_SHA}"
+          --build-arg SCATTER3D_GIT_COMMIT="${SCATTER3D_SOURCE_SHA}"
           --build-arg SCATTER3D_GIT_DIRTY=false
           -f docker/Dockerfile -t scatter3d-codex:ci .
       - name: Record local project image identity
@@ -263,10 +268,11 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
+          ref: ${{ env.SCATTER3D_SOURCE_SHA }}
       - name: Build pinned image
         run: >-
           docker build --pull=false
-          --build-arg SCATTER3D_GIT_COMMIT="${GITHUB_SHA}"
+          --build-arg SCATTER3D_GIT_COMMIT="${SCATTER3D_SOURCE_SHA}"
           --build-arg SCATTER3D_GIT_DIRTY=false
           -f docker/Dockerfile -t scatter3d-codex:ci .
       - name: Record local project image identity

@@ -436,7 +436,10 @@ def _write_payload(
 ) -> Path:
     from scatter3d.pipeline import write_json_report
 
-    return write_json_report(_json_safe(payload), path, overwrite=overwrite)
+    destination = write_json_report(_json_safe(payload), path, overwrite=overwrite)
+    if os.name == "posix":
+        destination.chmod(0o644)
+    return destination
 
 
 def _tagged_cube(comm, subdivisions: int):
