@@ -42,7 +42,11 @@ def _parser() -> argparse.ArgumentParser:
     invert.add_argument("--channel-mode", choices=("all", "transmission", "reflection"), default="all")
     invert.add_argument("--method", choices=("fixed", "gcv", "discrepancy", "energy"), default="gcv")
     invert.add_argument("--rank", type=int, help="required for --method fixed")
-    invert.add_argument("--noise-norm", type=float, help="required for --method discrepancy")
+    invert.add_argument(
+        "--noise-norm",
+        type=float,
+        help="optional solve-space target; whitened discrepancy defaults to sqrt(rows)",
+    )
     invert.add_argument("--energy-fraction", type=float, default=0.999)
     invert.add_argument(
         "--whitening",

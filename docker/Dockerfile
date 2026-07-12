@@ -34,6 +34,7 @@ RUN python3 -m pip install --no-cache-dir --no-deps . \
 COPY tests ./tests
 COPY examples ./examples
 COPY docs ./docs
+COPY validation ./validation
 
 RUN useradd --create-home --uid 1000 scatter3d \
     && chown -R scatter3d:scatter3d /opt/scatter3d

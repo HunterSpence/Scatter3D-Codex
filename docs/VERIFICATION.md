@@ -10,13 +10,19 @@ not replace CI logs or experiment artifacts.
 
 | Job | Environment | What it may establish |
 |---|---|---|
-| `pure-python` | CPython 3.11 and 3.12 | array contracts, CSV round trips, hashes, reference-only alignment, repeat noise, whitening, TSVD, metrics, NPZ pipeline |
-| `heavy-dolfinx` | digest-pinned complex DOLFINx/PETSc | form assembly, PML tensor/form behavior, port normalization, same-matrix RHS lifecycle, checkpoint identity, small FEM smoke |
-| `mpi` | same image, exactly two ranks | distributed ownership/reduction behavior and two-rank solver smoke |
+| `pure-python` | CPython 3.11 and 3.12 | array contracts, CSV round trips, hashes, reference-only alignment, repeat noise, whitening, TSVD, metrics, NPZ pipeline, and pure FEM configuration/tag/checkpoint contracts |
+| `heavy-dolfinx` | digest-pinned complex DOLFINx/PETSc | complex runtime import, live-frequency PML-expression construction, p=3 edge-space construction, and a small direct repeated-RHS solve |
+| `mpi` | same image, exactly two ranks | a small distributed iterative solve and its recorded ownership-independent global DoF count |
 
 Heavy and MPI jobs fail if zero tests are collected or any selected test skips.
 This prevents an unavailable DOLFINx dependency from producing a misleading
 green check.
+
+These smoke jobs do not establish PML reflection performance, absolute port
+power normalization, manufactured H(curl) convergence, analytical scattering
+accuracy, production scaling, or checkpoint/restart behavior. The executable
+programs under `validation/` are present in the pinned image, but their results
+become evidence only when the exact command and resulting artifacts are archived.
 
 ## What automated tests do not establish
 
