@@ -99,15 +99,15 @@ class RepeatNoiseEstimate:
     """Noise statistics from paired DUT-minus-reference repeats."""
 
     mean_differential: np.ndarray
-    variance: np.ndarray
+    sample_variance: np.ndarray
     repeat_count: int
     observation_shape: tuple[int, int, int, int]
-    covariance: np.ndarray | None = None
+    sample_covariance: np.ndarray | None = None
     diagnostics: Mapping[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         mean = _readonly(self.mean_differential, np.complex128)
-        variance = _readonly(self.variance, np.float64)
+        variance = _readonly(self.sample_variance, np.float64)
         expected = int(np.prod(self.observation_shape, dtype=np.int64))
         if self.repeat_count < 2:
             raise ValueError("at least two paired repeats are required")
@@ -120,7 +120,7 @@ class RepeatNoiseEstimate:
         if not np.all(np.isfinite(variance)) or np.any(variance < 0.0):
             raise ValueError("variance must be finite and non-negative")
 
-        covariance = self.covariance
+        covariance = self.sample_covariance
         if covariance is not None:
             covariance = _readonly(covariance, np.complex128)
             if covariance.shape != (expected, expected):
@@ -132,18 +132,32 @@ class RepeatNoiseEstimate:
             ):
                 raise ValueError("covariance diagonal does not match variance")
         object.__setattr__(self, "mean_differential", mean)
-        object.__setattr__(self, "variance", variance)
-        object.__setattr__(self, "covariance", covariance)
+        object.__setattr__(self, "sample_variance", variance)
+        object.__setattr__(self, "sample_covariance", covariance)
         object.__setattr__(self, "diagnostics", MappingProxyType(dict(self.diagnostics)))
 
-    def diagonal_model(
+    @property
+    def mean_variance(self) -> np.ndarray:
+        """Variance of ``mean_differential`` under independent paired repeats."""
+
+        return _readonly(self.sample_variance / self.repeat_count, np.float64)
+
+    @property
+    def mean_covariance(self) -> np.ndarray | None:
+        """Covariance of ``mean_differential`` when dense covariance was requested."""
+
+        if self.sample_covariance is None:
+            return None
+        return _readonly(self.sample_covariance / self.repeat_count, np.complex128)
+
+    def mean_diagonal_model(
         self,
         *,
         relative_floor: float = 1.0e-12,
         absolute_floor: float = 0.0,
     ) -> DiagonalNoiseModel:
         return DiagonalNoiseModel.from_variance(
-            self.variance,
+            self.mean_variance,
             relative_floor=relative_floor,
             absolute_floor=absolute_floor,
         )
@@ -214,6 +228,12 @@ def estimate_repeat_differential_noise(
                 f"dense covariance for {observations} observations is disabled; "
                 "use diagonal whitening or raise the explicit safety limit"
             )
+        if repeat_count <= observations:
+            raise ValueError(
+                "dense covariance is rank-deficient when paired repeat_count is not "
+                "greater than observation_count; use diagonal whitening or collect "
+                "more independent paired repeats"
+            )
         # Each row is a repeat. This orientation produces E[x x^H], not its
         # elementwise conjugate, for a complex random column vector x.
         covariance = centered.T @ centered.conj() / (repeat_count - 1)
@@ -221,10 +241,10 @@ def estimate_repeat_differential_noise(
     positive = variance[variance > 0.0]
     return RepeatNoiseEstimate(
         mean_differential=mean,
-        variance=variance,
+        sample_variance=variance,
         repeat_count=repeat_count,
         observation_shape=reference_shape,
-        covariance=covariance,
+        sample_covariance=covariance,
         diagnostics={
             "pairing": "same_index",
             "observation_count": observations,
@@ -261,7 +281,7 @@ class TSVDSolution:
     residual_norm: float
     relative_residual: float
     solution_norm: float
-    selected_condition_number: float
+    selected_condition_number: float | None
     criterion_ranks: np.ndarray
     criterion_values: np.ndarray
     singular_value_threshold: float
@@ -378,27 +398,42 @@ def tsvd_solve(
     elif method == "discrepancy":
         if noise_norm is None or not np.isfinite(noise_norm) or noise_norm < 0.0:
             raise ValueError("method='discrepancy' requires a finite non-negative noise_norm")
-        meeting = np.flatnonzero(residual_curve <= noise_norm)
+        # Rank zero is a meaningful discrepancy solution: if the unmodelled
+        # observation already lies inside the registered noise ball, fitting a
+        # singular vector would manufacture structure from a null experiment.
+        criterion_ranks = np.arange(0, available + 1, dtype=np.int64)
+        criterion_values = np.concatenate(
+            (np.asarray([float(np.linalg.norm(b))]), residual_curve)
+        )
+        meeting = np.flatnonzero(criterion_values <= noise_norm)
         target_met = meeting.size > 0
-        selected = int(ranks[meeting[0]]) if target_met else available
-        criterion_values = residual_curve
+        selected = int(criterion_ranks[meeting[0]]) if target_met else available
     else:
-        denominator = (a.shape[0] - ranks).astype(np.float64) ** 2
+        # GCV also needs the no-fit candidate. Otherwise a null experiment is
+        # forced to retain at least one singular direction.
+        criterion_ranks = np.arange(0, available + 1, dtype=np.int64)
+        gcv_residual_squared = np.concatenate(
+            (np.asarray([float(np.vdot(b, b).real)]), residual_squared)
+        )
+        denominator = (a.shape[0] - criterion_ranks).astype(np.float64) ** 2
         criterion_values = np.divide(
-            residual_squared,
+            gcv_residual_squared,
             denominator,
-            out=np.full_like(residual_squared, np.inf),
+            out=np.full_like(gcv_residual_squared, np.inf),
             where=denominator > 0.0,
         )
         finite = np.flatnonzero(np.isfinite(criterion_values))
         selected = (
-            int(ranks[finite[np.argmin(criterion_values[finite])]])
+            int(criterion_ranks[finite[np.argmin(criterion_values[finite])]])
             if finite.size
             else available
         )
 
-    coefficients = beta[:selected] / singular_values[:selected]
-    x = vh[:selected, :].conj().T @ coefficients
+    if selected == 0:
+        x = np.zeros(a.shape[1], dtype=dtype)
+    else:
+        coefficients = beta[:selected] / singular_values[:selected]
+        x = vh[:selected, :].conj().T @ coefficients
     predicted = a @ x
     residual = b - predicted
     residual_norm = float(np.linalg.norm(residual))
@@ -408,7 +443,9 @@ def tsvd_solve(
         if observation_norm > 0.0
         else (0.0 if residual_norm == 0.0 else float("inf"))
     )
-    condition = float(singular_values[0] / singular_values[selected - 1])
+    condition = (
+        None if selected == 0 else float(singular_values[0] / singular_values[selected - 1])
+    )
     return TSVDSolution(
         x=x,
         predicted=predicted,

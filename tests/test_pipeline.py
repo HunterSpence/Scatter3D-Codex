@@ -162,6 +162,46 @@ def test_reconstruct_auto_whitens_paired_repeat_mean(tmp_path):
         assert archive["noise_standard_deviation"].shape == (4,)
 
 
+def test_discrepancy_whitening_preserves_a_null_as_rank_zero(tmp_path):
+    bundle = tmp_path / "measurement.npz"
+    sensitivity = tmp_path / "sensitivity.npz"
+    output = tmp_path / "out.npz"
+    offsets = np.asarray([-0.02 - 0.01j, 0.0 + 0.0j, 0.02 + 0.01j])[:, None]
+    reference = np.zeros((3, 1, 1, 2, 2), dtype=np.complex128)
+    dut = np.broadcast_to(offsets, (3, 4)).reshape(3, 1, 1, 2, 2).copy()
+    _write_bundle(
+        bundle,
+        reference_s=reference,
+        dut_s=dut,
+        frequencies_hz=np.array([5.0e9]),
+        angles_deg=np.array([0.0]),
+        labels=("P1", "P2"),
+    )
+    np.savez_compressed(
+        sensitivity,
+        schema_version=np.array(SENSITIVITY_SCHEMA_VERSION),
+        A=np.eye(4, dtype=np.complex128),
+        frequencies_hz=np.array([5.0e9]),
+        angles_deg=np.array([0.0]),
+        port_labels=np.array(["P1", "P2"]),
+    )
+
+    report = reconstruct_from_bundle(
+        bundle,
+        sensitivity,
+        output,
+        method="discrepancy",
+    )
+
+    assert report.whitening_used
+    assert report.selected_rank == 0
+    assert report.noise_norm_used == pytest.approx(2.0)
+    with np.load(output, allow_pickle=False) as archive:
+        np.testing.assert_array_equal(
+            archive["estimate"], np.zeros(4, dtype=np.complex128)
+        )
+
+
 def test_cli_validate_writes_machine_readable_report(tmp_path, capsys):
     bundle = tmp_path / "measurement.npz"
     report_path = tmp_path / "validation.json"

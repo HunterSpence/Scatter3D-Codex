@@ -18,26 +18,32 @@ def test_paired_repeat_covariance_uses_complex_x_xh_orientation() -> None:
             [1 + 2j, 2 - 1j, -1 + 0.5j, 0.25 - 2j],
             [2 + 0j, -1 + 3j, 0.5 + 1j, 2 + 0.5j],
             [-1 + 1j, 0.5 - 2j, 3 - 0.25j, -0.5 + 1j],
+            [0.5 - 0.5j, 1 + 1.5j, -2 + 0.25j, 1.5 - 0.75j],
+            [3 - 1j, -0.25 + 0.5j, 1.25 - 1.5j, -1 + 2j],
         ],
         dtype=np.complex128,
     )
-    reference = np.zeros((3, 1, 1, 2, 2), dtype=np.complex128)
-    dut = samples.reshape(3, 1, 1, 2, 2)
+    reference = np.zeros((5, 1, 1, 2, 2), dtype=np.complex128)
+    dut = samples.reshape(5, 1, 1, 2, 2)
     estimate = estimate_repeat_differential_noise(
         reference, dut, full_covariance=True
     )
 
     centered = samples - samples.mean(axis=0)
-    expected = centered.T @ centered.conj() / 2
-    assert np.allclose(estimate.covariance, expected)
-    assert np.allclose(estimate.covariance, estimate.covariance.conj().T)
+    expected = centered.T @ centered.conj() / 4
+    assert np.allclose(estimate.sample_covariance, expected)
+    assert np.allclose(
+        estimate.sample_covariance, estimate.sample_covariance.conj().T
+    )
     assert not np.allclose(expected, expected.conj())
-    assert np.allclose(estimate.variance, np.diag(expected).real)
+    assert np.allclose(estimate.sample_variance, np.diag(expected).real)
+    assert np.allclose(estimate.mean_variance, np.diag(expected).real / 5)
+    assert np.allclose(estimate.mean_covariance, expected / 5)
     assert estimate.diagnostics["pairing"] == "same_index"
 
 
 def test_dense_covariance_has_an_explicit_size_guard() -> None:
-    repeats = np.zeros((2, 1, 1, 2, 2), dtype=np.complex128)
+    repeats = np.zeros((6, 1, 1, 2, 2), dtype=np.complex128)
     with pytest.raises(ValueError, match="dense covariance"):
         estimate_repeat_differential_noise(
             repeats,
@@ -45,6 +51,15 @@ def test_dense_covariance_has_an_explicit_size_guard() -> None:
             full_covariance=True,
             max_full_covariance_observations=3,
         )
+
+
+def test_dense_covariance_rejects_insufficient_repeat_rank() -> None:
+    repeats = np.zeros((4, 1, 1, 2, 2), dtype=np.complex128)
+    with pytest.raises(ValueError, match="rank-deficient"):
+        estimate_repeat_differential_noise(repeats, repeats, full_covariance=True)
+
+    diagonal = estimate_repeat_differential_noise(repeats, repeats)
+    assert diagonal.sample_covariance is None
 
 
 def test_diagonal_whitening_scales_a_and_b_together() -> None:
@@ -68,6 +83,18 @@ def test_zero_repeat_variance_requires_physical_absolute_floor() -> None:
         np.zeros(3), absolute_floor=1.0e-12
     )
     assert np.allclose(model.standard_deviation, 1.0e-6)
+
+
+def test_repeat_estimate_mean_model_uses_variance_of_the_mean() -> None:
+    reference = np.zeros((3, 1, 1, 1, 1), dtype=np.complex128)
+    dut = np.asarray([-1.0, 0.0, 1.0], dtype=np.complex128).reshape(3, 1, 1, 1, 1)
+    estimate = estimate_repeat_differential_noise(reference, dut)
+
+    assert estimate.sample_variance.item() == pytest.approx(1.0)
+    assert estimate.mean_variance.item() == pytest.approx(1.0 / 3.0)
+    assert estimate.mean_diagonal_model().standard_deviation.item() == pytest.approx(
+        np.sqrt(1.0 / 3.0)
+    )
 
 
 def test_fixed_rank_complex_tsvd_recovers_exact_solution() -> None:
@@ -112,6 +139,26 @@ def test_energy_and_discrepancy_rank_rules_are_auditable() -> None:
     assert discrepancy.residual_norm <= 1.1
 
 
+def test_discrepancy_selects_rank_zero_for_a_registered_null() -> None:
+    matrix = np.diag(np.asarray([4.0, 2.0, 1.0]))
+    observations = np.asarray([0.2 + 0.1j, -0.1j, 0.05])
+    noise_norm = float(np.linalg.norm(observations))
+
+    solution = tsvd_solve(
+        matrix,
+        observations,
+        method="discrepancy",
+        noise_norm=noise_norm,
+    )
+
+    assert solution.selected_rank == 0
+    assert solution.selected_condition_number is None
+    assert solution.target_met is True
+    np.testing.assert_array_equal(solution.criterion_ranks, np.arange(4))
+    np.testing.assert_array_equal(solution.x, np.zeros(3, dtype=np.complex128))
+    np.testing.assert_array_equal(solution.predicted, np.zeros(3, dtype=np.complex128))
+
+
 def test_gcv_returns_finite_selection_and_curve() -> None:
     matrix = np.asarray(
         [
@@ -124,9 +171,26 @@ def test_gcv_returns_finite_selection_and_curve() -> None:
     )
     observations = np.asarray([4.0, 2.0, 0.2, 0.15, 0.11])
     solution = tsvd_solve(matrix, observations, method="gcv")
-    assert 1 <= solution.selected_rank <= solution.available_rank
+    assert 0 <= solution.selected_rank <= solution.available_rank
     assert np.all(np.isfinite(solution.criterion_values))
     assert solution.criterion_ranks.shape == solution.criterion_values.shape
+
+
+def test_gcv_can_select_rank_zero_for_orthogonal_null_noise() -> None:
+    matrix = np.asarray(
+        [
+            [1.0, 0.0],
+            [0.0, 1.0],
+            [0.0, 0.0],
+            [0.0, 0.0],
+        ]
+    )
+    observations = np.asarray([0.0, 0.0, 1.0, -1.0])
+    solution = tsvd_solve(matrix, observations, method="gcv")
+
+    assert solution.selected_rank == 0
+    assert solution.selected_condition_number is None
+    np.testing.assert_array_equal(solution.x, np.zeros(2, dtype=np.complex128))
 
 
 def test_tsvd_rejects_ambiguous_or_unusable_settings() -> None:

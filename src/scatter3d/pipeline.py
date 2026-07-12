@@ -340,9 +340,9 @@ def _repeat_whitening(
     from .inverse import DiagonalNoiseModel, estimate_repeat_differential_noise
 
     estimate = estimate_repeat_differential_noise(bundle.reference_s, bundle.dut_s)
-    # The estimator returns variance of individual paired differentials.  The
-    # inverted observation is their mean, whose variance is smaller by R.
-    mean_variance = estimate.variance / estimate.repeat_count
+    # The inverted observation is the mean paired differential, so use its
+    # explicitly named variance rather than the individual-sample variance.
+    mean_variance = estimate.mean_variance
     if not np.any(mean_variance > 0.0) and absolute_floor <= 0.0:
         reason = "all paired-repeat variances are zero and no absolute floor was supplied"
         if mode == "required":
