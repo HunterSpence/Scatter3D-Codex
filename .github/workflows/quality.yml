@@ -201,7 +201,11 @@ jobs:
         run: docker build --pull=false -f docker/Dockerfile -t scatter3d-codex:ci .
       - name: Run heavy tests and reject skips
         run: |
-          docker run --rm scatter3d-codex:ci bash -euc '
+          mkdir -p "${RUNNER_TEMP}/scatter3d-heavy"
+          chmod 0777 "${RUNNER_TEMP}/scatter3d-heavy"
+          docker run --rm \
+            --volume "${RUNNER_TEMP}/scatter3d-heavy:/artifacts" \
+            scatter3d-codex:ci bash -euc '
             python3 -m pytest -p no:cacheprovider -W error -m "heavy and not mpi" -ra --junitxml=/tmp/heavy.xml
             python3 - <<"PY"
           import xml.etree.ElementTree as ET
@@ -213,7 +217,25 @@ jobs:
               raise SystemExit(f"heavy verification invalid: tests={tests}, skipped={skipped}")
           print(f"heavy verification complete: tests={tests}, skipped={skipped}")
           PY
+            python3 validation/manufactured_hcurl.py \
+              --degrees 1 2 3 \
+              --subdivisions 3 4 6 \
+              --output /artifacts/manufactured-hcurl.json
+            python3 validation/fem_smoke.py \
+              --solver direct \
+              --degree 3 \
+              --subdivisions 2 \
+              --frequencies-hz 1.0e8 \
+              --output /artifacts/fem-smoke-direct-p3.json
+            cp /opt/scatter3d/runtime-metadata.json /artifacts/runtime-metadata.json
           '
+      - name: Archive heavy verification evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: scatter3d-heavy-verification
+          path: ${{ runner.temp }}/scatter3d-heavy/*.json
+          if-no-files-found: error
+          retention-days: 30
 
   mpi:
     name: Two-rank MPI tests
@@ -228,7 +250,11 @@ jobs:
         run: docker build --pull=false -f docker/Dockerfile -t scatter3d-codex:ci .
       - name: Run on two ranks and reject skips
         run: |
-          docker run --rm --ipc=host scatter3d-codex:ci bash -euc '
+          mkdir -p "${RUNNER_TEMP}/scatter3d-mpi"
+          chmod 0777 "${RUNNER_TEMP}/scatter3d-mpi"
+          docker run --rm --ipc=host \
+            --volume "${RUNNER_TEMP}/scatter3d-mpi:/artifacts" \
+            scatter3d-codex:ci bash -euc '
             mpirun -n 2 sh -euc '\''
               rank="${PMI_RANK:-${OMPI_COMM_WORLD_RANK:-}}"
               test -n "${rank}"
@@ -249,4 +275,18 @@ jobs:
                   raise SystemExit(f"MPI verification invalid in {path}: tests={tests}, skipped={skipped}")
           print("MPI verification complete on two ranks with no skips")
           PY
+            mpirun -n 2 python3 validation/fem_smoke.py \
+              --solver iterative \
+              --degree 1 \
+              --subdivisions 2 \
+              --frequencies-hz 1.0e8 \
+              --output /artifacts/fem-smoke-iterative-mpi2.json
+            cp /opt/scatter3d/runtime-metadata.json /artifacts/runtime-metadata.json
           '
+      - name: Archive MPI verification evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: scatter3d-mpi-verification
+          path: ${{ runner.temp }}/scatter3d-mpi/*.json
+          if-no-files-found: error
+          retention-days: 30
