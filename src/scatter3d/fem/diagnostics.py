@@ -31,6 +31,8 @@ class SolverComponentDiagnostics:
     pc_type: str
     factor_solver_type: str | None
     options_prefix: str
+    maximum_iterations: int
+    norm_type: str
     mpi_ranks: tuple[int, ...]
     instances: int
 
@@ -53,12 +55,22 @@ class EffectiveSolverHierarchy:
 
     preconditioning_side: str
     top_level: SolverComponentDiagnostics
+    pc_uses_amat: bool
     relative_tolerance: float
     absolute_tolerance: float
     maximum_iterations: int
     asm_type: str | None
     asm_overlap: int | None
     asm_subdomain_solvers: tuple[SolverComponentDiagnostics, ...]
+    mg_levels: int | None
+    mg_type: str | None
+    mg_cycle_type: str | None
+    mg_galerkin: str | None
+    mg_fine_smoother: SolverComponentDiagnostics | None
+    mg_fine_asm_type: str | None
+    mg_fine_asm_overlap: int | None
+    mg_fine_asm_subdomain_solvers: tuple[SolverComponentDiagnostics, ...]
+    mg_coarse_solver: SolverComponentDiagnostics | None
     petsc_view_ascii: str
 
 
@@ -81,13 +93,24 @@ def _factor_solver_type(pc: Any) -> str | None:
 
 
 def _local_solver_component(ksp: Any, path: str) -> SolverComponentDiagnostics:
+    from petsc4py import PETSc
+
     pc = ksp.getPC()
+    norm_value = ksp.getNormType()
+    norm_type = {
+        PETSc.KSP.NormType.NONE: "none",
+        PETSc.KSP.NormType.PRECONDITIONED: "preconditioned",
+        PETSc.KSP.NormType.UNPRECONDITIONED: "unpreconditioned",
+        PETSc.KSP.NormType.NATURAL: "natural",
+    }.get(norm_value, str(norm_value))
     return SolverComponentDiagnostics(
         path=path,
         ksp_type=str(ksp.getType()),
         pc_type=str(pc.getType()),
         factor_solver_type=_factor_solver_type(pc),
         options_prefix=str(ksp.getOptionsPrefix() or ""),
+        maximum_iterations=int(ksp.getTolerances()[3]),
+        norm_type=norm_type,
         mpi_ranks=(),
         instances=1,
     )
@@ -106,11 +129,13 @@ def _aggregate_solver_components(
             item.pc_type,
             item.factor_solver_type,
             item.options_prefix,
+            item.maximum_iterations,
+            item.norm_type,
         )
         for item in local_components
     )
     gathered = comm.allgather(local_payload)
-    groups: dict[tuple[str, str, str | None, str], dict[str, Any]] = {}
+    groups: dict[tuple[str, str, str | None, str, int, str], dict[str, Any]] = {}
     for rank, components in enumerate(gathered):
         for component in components:
             group = groups.setdefault(component, {"ranks": set(), "instances": 0})
@@ -123,6 +148,8 @@ def _aggregate_solver_components(
             pc_type=key[1],
             factor_solver_type=key[2],
             options_prefix=key[3],
+            maximum_iterations=key[4],
+            norm_type=key[5],
             mpi_ranks=tuple(sorted(group["ranks"])),
             instances=int(group["instances"]),
         )
@@ -146,6 +173,10 @@ _ASM_TYPE_PATTERN = re.compile(
     r"\brestriction/interpolation type\s*-\s*([A-Za-z_]+)\b",
     re.IGNORECASE,
 )
+_MG_HEADER_PATTERN = re.compile(
+    r"\btype is\s+([A-Za-z_]+),\s*levels=(\d+)\s+cycles=([A-Za-z_]+)\b",
+    re.IGNORECASE,
+)
 
 
 def parse_petsc_asm_view(view_text: str) -> tuple[str, int]:
@@ -164,6 +195,32 @@ def parse_petsc_asm_view(view_text: str) -> tuple[str, int]:
         )
     assert type_match is not None and overlap_match is not None
     return type_match.group(1).lower(), int(overlap_match.group(1))
+
+
+def parse_petsc_mg_view(view_text: str) -> tuple[str, int, str, str]:
+    """Parse PETSc 3.24's effective PCMG type, level, cycle, and Galerkin mode."""
+
+    header = _MG_HEADER_PATTERN.search(view_text)
+    if header is None:
+        raise ValueError("PETSc MG view is missing type/levels/cycles")
+    if "Not using Galerkin computed coarse grid matrices" in view_text:
+        galerkin = "none"
+    elif "Using externally compute Galerkin coarse grid matrices" in view_text:
+        galerkin = "external"
+    elif "Using Galerkin computed coarse grid matrices for pmat" in view_text:
+        galerkin = "pmat"
+    elif "Using Galerkin computed coarse grid matrices for mat" in view_text:
+        galerkin = "mat"
+    elif "Using Galerkin computed coarse grid matrices" in view_text:
+        galerkin = "both"
+    else:
+        raise ValueError("PETSc MG view is missing Galerkin mode")
+    return (
+        header.group(1).lower(),
+        int(header.group(2)),
+        header.group(3).lower(),
+        galerkin,
+    )
 
 
 def _remove_temporary_view(path: str) -> None:
@@ -292,6 +349,62 @@ def validate_effective_solver_hierarchy(
         raise RuntimeError(
             "effective PETSc maximum iterations differs from typed configuration"
         )
+    if config.uses_p_multigrid:
+        if (
+            effective.mg_levels != 2
+            or effective.mg_type != "multiplicative"
+            or effective.mg_galerkin != "none"
+            or effective.pc_uses_amat
+        ):
+            raise RuntimeError(
+                "effective p-multigrid must be two-level, multiplicative, "
+                "non-Galerkin, and use Pmat"
+            )
+        fine = effective.mg_fine_smoother
+        coarse = effective.mg_coarse_solver
+        if (
+            fine is None
+            or fine.ksp_type.lower() != "richardson"
+            or fine.pc_type.lower() != "asm"
+            or fine.maximum_iterations != 1
+            or fine.norm_type != "none"
+        ):
+            raise RuntimeError(
+                "effective p-multigrid fine smoother is not one-step Richardson/ASM"
+            )
+        if (
+            coarse is None
+            or coarse.ksp_type.lower() != "preonly"
+            or coarse.pc_type.lower() != "lu"
+            or (coarse.factor_solver_type or "").lower() != "mumps"
+        ):
+            raise RuntimeError(
+                "effective p-multigrid coarse solver is not preonly/LU/MUMPS"
+            )
+        if not effective.mg_fine_asm_subdomain_solvers:
+            raise RuntimeError("effective p-multigrid fine ASM has no subdomain solvers")
+        expected_asm_type = str(
+            config.petsc_options.get("mg_levels_1_pc_asm_type", "restrict")
+        ).lower()
+        expected_overlap = int(
+            config.petsc_options.get("mg_levels_1_pc_asm_overlap", 1)
+        )
+        if (
+            effective.mg_fine_asm_type != expected_asm_type
+            or effective.mg_fine_asm_overlap != expected_overlap
+        ):
+            raise RuntimeError(
+                "effective p-multigrid fine ASM type or overlap differs from request"
+            )
+        if any(
+            item.ksp_type.lower() != "preonly"
+            or item.pc_type.lower() != "lu"
+            or (item.factor_solver_type or "").lower() != "mumps"
+            for item in effective.mg_fine_asm_subdomain_solvers
+        ):
+            raise RuntimeError(
+                "effective p-multigrid fine ASM local solver is not preonly/LU/MUMPS"
+            )
 
 
 def inspect_petsc_solver_hierarchy(
@@ -323,6 +436,9 @@ def inspect_petsc_solver_hierarchy(
         "top-level tolerances",
     )
     pc = ksp.getPC()
+    pc_uses_amat = _consistent_rank_value(
+        comm, bool(pc.getUseAmat()), "top-level PC use-Amat flag"
+    )
     top_levels = _aggregate_solver_components(
         comm, (_local_solver_component(ksp, "top"),), "top"
     )
@@ -334,6 +450,15 @@ def inspect_petsc_solver_hierarchy(
     asm_overlap = None
     view_text = _capture_petsc_ascii_view(ksp, comm)
     subdomains: tuple[SolverComponentDiagnostics, ...] = ()
+    mg_levels = None
+    mg_type = None
+    mg_cycle_type = None
+    mg_galerkin = None
+    mg_fine_smoother = None
+    mg_fine_asm_type = None
+    mg_fine_asm_overlap = None
+    mg_fine_subdomains: tuple[SolverComponentDiagnostics, ...] = ()
+    mg_coarse_solver = None
     if str(pc.getType()).lower() == "asm":
         asm_type, asm_overlap = parse_petsc_asm_view(view_text)
         local_subdomains = tuple(
@@ -343,6 +468,45 @@ def inspect_petsc_solver_hierarchy(
         subdomains = _aggregate_solver_components(
             comm, local_subdomains, "asm.subdomains"
         )
+    elif str(pc.getType()).lower() == "mg":
+        mg_type, mg_levels, mg_cycle_type, mg_galerkin = parse_petsc_mg_view(
+            view_text
+        )
+        live_levels = _consistent_rank_value(
+            comm, int(pc.getMGLevels()), "MG level count"
+        )
+        if live_levels != mg_levels:
+            raise RuntimeError(
+                f"PETSc MG view levels={mg_levels} != live levels={live_levels}"
+            )
+        fine_ksp = pc.getMGSmoother(mg_levels - 1)
+        coarse_ksp = pc.getMGCoarseSolve()
+        fine_groups = _aggregate_solver_components(
+            comm,
+            (_local_solver_component(fine_ksp, "mg.fine"),),
+            "mg.fine",
+        )
+        coarse_groups = _aggregate_solver_components(
+            comm,
+            (_local_solver_component(coarse_ksp, "mg.coarse"),),
+            "mg.coarse",
+        )
+        if len(fine_groups) != 1 or len(coarse_groups) != 1:
+            raise RuntimeError("effective MG level solvers differ across MPI ranks")
+        mg_fine_smoother = fine_groups[0]
+        mg_coarse_solver = coarse_groups[0]
+        fine_pc = fine_ksp.getPC()
+        if str(fine_pc.getType()).lower() == "asm":
+            mg_fine_asm_type, mg_fine_asm_overlap = parse_petsc_asm_view(
+                view_text
+            )
+            local_subdomains = tuple(
+                _local_solver_component(sub_ksp, f"mg.fine.asm[{index}]")
+                for index, sub_ksp in enumerate(fine_pc.getASMSubKSP())
+            )
+            mg_fine_subdomains = _aggregate_solver_components(
+                comm, local_subdomains, "mg.fine.asm.subdomains"
+            )
     return SolverHierarchyDiagnostics(
         requested=RequestedSolverHierarchy(
             ksp_type=config.ksp_type,
@@ -358,12 +522,22 @@ def inspect_petsc_solver_hierarchy(
         effective=EffectiveSolverHierarchy(
             preconditioning_side=side,
             top_level=top_levels[0],
+            pc_uses_amat=pc_uses_amat,
             relative_tolerance=float(tolerances[0]),
             absolute_tolerance=float(tolerances[1]),
             maximum_iterations=int(tolerances[3]),
             asm_type=asm_type,
             asm_overlap=asm_overlap,
             asm_subdomain_solvers=subdomains,
+            mg_levels=mg_levels,
+            mg_type=mg_type,
+            mg_cycle_type=mg_cycle_type,
+            mg_galerkin=mg_galerkin,
+            mg_fine_smoother=mg_fine_smoother,
+            mg_fine_asm_type=mg_fine_asm_type,
+            mg_fine_asm_overlap=mg_fine_asm_overlap,
+            mg_fine_asm_subdomain_solvers=mg_fine_subdomains,
+            mg_coarse_solver=mg_coarse_solver,
             petsc_view_ascii=view_text,
         ),
     )

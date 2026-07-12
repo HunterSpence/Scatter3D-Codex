@@ -21,8 +21,12 @@ _RESERVED_TOP_LEVEL_PETSC_OPTIONS = frozenset(
         "ksp_rtol",
         "ksp_type",
         "pc_factor_mat_solver_type",
+        "pc_mg_galerkin",
+        "pc_mg_levels",
+        "pc_mg_type",
         "pc_side",
         "pc_type",
+        "pc_use_amat",
     }
 )
 
@@ -238,6 +242,7 @@ class LinearSolverConfig:
     absolute_tolerance: float = 1.0e-12
     maximum_iterations: int = 2_000
     preconditioner_absorption_shift: float = 0.0
+    p_multigrid_coarse_degree: int | None = None
     error_if_not_converged: bool = True
     petsc_options: Mapping[str, str | int | float | None] = field(default_factory=dict)
 
@@ -261,6 +266,11 @@ class LinearSolverConfig:
         atol = float(self.absolute_tolerance)
         maximum = int(self.maximum_iterations)
         absorption_shift = float(self.preconditioner_absorption_shift)
+        coarse_degree = (
+            None
+            if self.p_multigrid_coarse_degree is None
+            else int(self.p_multigrid_coarse_degree)
+        )
         if not (isfinite(rtol) and isfinite(atol) and rtol > 0 and atol >= 0):
             raise ValueError("solver tolerances must be finite with rtol > 0 and atol >= 0")
         if maximum < 1:
@@ -273,12 +283,22 @@ class LinearSolverConfig:
             raise ValueError(
                 "preconditioner_absorption_shift is available only for iterative solvers"
             )
+        if coarse_degree is not None:
+            if coarse_degree not in (1, 2):
+                raise ValueError("p_multigrid_coarse_degree must be 1 or 2")
+            if path != "iterative" or self.pc_type.lower() != "mg":
+                raise ValueError(
+                    "p_multigrid_coarse_degree requires iterative solver_path and pc_type='mg'"
+                )
+        elif self.pc_type.lower() == "mg":
+            raise ValueError("pc_type='mg' requires p_multigrid_coarse_degree")
         object.__setattr__(self, "relative_tolerance", rtol)
         object.__setattr__(self, "absolute_tolerance", atol)
         object.__setattr__(self, "maximum_iterations", maximum)
         object.__setattr__(
             self, "preconditioner_absorption_shift", absorption_shift
         )
+        object.__setattr__(self, "p_multigrid_coarse_degree", coarse_degree)
         normalized_options: dict[str, str | int | float | None] = {}
         for raw_key, value in self.petsc_options.items():
             key = str(raw_key).strip().lstrip("-").strip().lower()
@@ -304,6 +324,10 @@ class LinearSolverConfig:
     @property
     def is_iterative(self) -> bool:
         return self.solver_path == "iterative"
+
+    @property
+    def uses_p_multigrid(self) -> bool:
+        return self.p_multigrid_coarse_degree is not None
 
     @classmethod
     def direct(cls, *, factor_solver_type: str = "mumps") -> LinearSolverConfig:
@@ -346,6 +370,46 @@ class LinearSolverConfig:
         values.update(overrides)
         return cls(**values)
 
+    @classmethod
+    def iterative_p_multigrid(
+        cls,
+        *,
+        coarse_degree: int = 1,
+        **overrides: Any,
+    ) -> LinearSolverConfig:
+        """Two-level assembled p-multigrid with an exact low-order coarse solve."""
+
+        values: dict[str, Any] = {
+            "solver_path": "iterative",
+            "ksp_type": "fgmres",
+            "pc_type": "mg",
+            "factor_solver_type": None,
+            "preconditioning_side": "right",
+            "relative_tolerance": 1.0e-8,
+            "maximum_iterations": 1_000,
+            "p_multigrid_coarse_degree": coarse_degree,
+            "petsc_options": {
+                "ksp_gmres_restart": 80,
+                "mg_levels_1_ksp_type": "richardson",
+                "mg_levels_1_ksp_max_it": 1,
+                "mg_levels_1_pc_type": "asm",
+                "mg_levels_1_pc_asm_overlap": 1,
+                "mg_levels_1_sub_ksp_type": "preonly",
+                "mg_levels_1_sub_pc_type": "lu",
+                "mg_levels_1_sub_pc_factor_mat_solver_type": "mumps",
+                "mg_coarse_ksp_type": "preonly",
+                "mg_coarse_pc_type": "lu",
+                "mg_coarse_pc_factor_mat_solver_type": "mumps",
+            },
+        }
+        option_overrides = overrides.pop("petsc_options", None)
+        values.update(overrides)
+        if option_overrides is not None:
+            merged_options = dict(values["petsc_options"])
+            merged_options.update(option_overrides)
+            values["petsc_options"] = merged_options
+        return cls(**values)
+
     def canonical(self) -> dict[str, Any]:
         return {
             "ksp_type": self.ksp_type,
@@ -357,6 +421,7 @@ class LinearSolverConfig:
             "absolute_tolerance": self.absolute_tolerance,
             "maximum_iterations": self.maximum_iterations,
             "preconditioner_absorption_shift": self.preconditioner_absorption_shift,
+            "p_multigrid_coarse_degree": self.p_multigrid_coarse_degree,
             "error_if_not_converged": self.error_if_not_converged,
             "petsc_options": dict(sorted(self.petsc_options.items())),
         }

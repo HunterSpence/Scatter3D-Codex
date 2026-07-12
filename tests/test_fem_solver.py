@@ -20,6 +20,20 @@ def test_petsc_asm_view_parser_requires_effective_type_and_overlap() -> None:
         parse_petsc_asm_view("amount of overlap = 1")
 
 
+def test_petsc_mg_view_parser_requires_non_galerkin_hierarchy_fields() -> None:
+    from scatter3d.fem.diagnostics import parse_petsc_mg_view
+
+    view = """
+      type is MULTIPLICATIVE, levels=2 cycles=v
+        Not using Galerkin computed coarse grid matrices
+    """
+    assert parse_petsc_mg_view(view) == ("multiplicative", 2, "v", "none")
+    with pytest.raises(ValueError, match="type/levels/cycles"):
+        parse_petsc_mg_view("Not using Galerkin computed coarse grid matrices")
+    with pytest.raises(ValueError, match="Galerkin mode"):
+        parse_petsc_mg_view("type is MULTIPLICATIVE, levels=2 cycles=v")
+
+
 def test_collective_view_path_broadcasts_rank_zero_creation_failure(
     monkeypatch,
 ) -> None:
@@ -79,8 +93,15 @@ def test_effective_component_aggregation_deduplicates_all_mpi_ranks() -> None:
         _aggregate_solver_components,
     )
 
-    common = ("preonly", "ilu", None, "scatter3d_0_sub_")
-    local_lu = ("preonly", "lu", "mumps", "scatter3d_0_sub_")
+    common = ("preonly", "ilu", None, "scatter3d_0_sub_", 1, "none")
+    local_lu = (
+        "preonly",
+        "lu",
+        "mumps",
+        "scatter3d_0_sub_",
+        1,
+        "none",
+    )
 
     class FakeComm:
         def allgather(self, value):
@@ -94,6 +115,8 @@ def test_effective_component_aggregation_deduplicates_all_mpi_ranks() -> None:
             pc_type=common[1],
             factor_solver_type=common[2],
             options_prefix=common[3],
+            maximum_iterations=common[4],
+            norm_type=common[5],
             mpi_ranks=(),
             instances=1,
         ),
@@ -142,7 +165,11 @@ def _tiny_problem(comm):
 
 
 def _solver_and_ports(
-    comm, iterative: bool = False, absorption_shift: float = 0.0
+    comm,
+    iterative: bool = False,
+    absorption_shift: float = 0.0,
+    degree: int = 1,
+    p_multigrid: bool = False,
 ):
     from dolfinx import fem
     from petsc4py import PETSc
@@ -170,14 +197,18 @@ def _solver_and_ports(
         VolumeTagContract({"domain": 1}),
         BoundaryTagContract(ports={"left": 10, "right": 11}, pec_tags=(20,)),
     )
-    solver_config = (
-        LinearSolverConfig.iterative_maxwell(
+    if p_multigrid:
+        solver_config = LinearSolverConfig.iterative_p_multigrid(
             maximum_iterations=500,
             preconditioner_absorption_shift=absorption_shift,
         )
-        if iterative
-        else LinearSolverConfig.direct()
-    )
+    elif iterative:
+        solver_config = LinearSolverConfig.iterative_maxwell(
+            maximum_iterations=500,
+            preconditioner_absorption_shift=absorption_shift,
+        )
+    else:
+        solver_config = LinearSolverConfig.direct()
     definitions = tuple(
         PortDefinition(
             name,
@@ -193,7 +224,7 @@ def _solver_and_ports(
         facet_tags,
         contract,
         MaterialMap(Material(2.0, conductivity_s_per_m=0.02, name="lossy")),
-        MaxwellProblemConfig(polynomial_degree=1),
+        MaxwellProblemConfig(polynomial_degree=degree),
         matched_ports=definitions,
         solver_config=solver_config,
         initial_frequency_hz=1.0e8,
@@ -432,6 +463,245 @@ def test_shifted_iterative_path_reports_effective_asm_hierarchy() -> None:
         and item.instances >= 1
         for item in hierarchy.effective.asm_subdomain_solvers
     )
+
+
+@pytest.mark.heavy
+def test_two_level_p_multigrid_reuses_transfer_and_reports_live_hierarchy() -> None:
+    pytest.importorskip("dolfinx")
+    from mpi4py import MPI
+
+    solver, ports = _solver_and_ports(
+        MPI.COMM_SELF,
+        absorption_shift=0.5,
+        degree=3,
+        p_multigrid=True,
+    )
+    result = solver.solve((1.0e8, 1.2e8), ports, retain_solutions=False)
+    assert result.matrix_assemblies == 2
+    assert result.preconditioner_matrix_assemblies == 2
+    assert result.coarse_preconditioner_matrix_assemblies == 2
+    assert result.transfer_operator_assemblies == 1
+    assert result.operator_setups == 2
+    assert result.global_numeric_factorizations == 0
+    assert result.coarse_global_factorizations == 2
+    assert result.rhs_solves == 4
+    for item in result.diagnostics:
+        assert item.fine_degree == 3
+        assert item.coarse_degree == 1
+        assert item.coarse_global_complex_dofs < item.global_complex_dofs
+        assert item.p_multigrid_operator_checks_passed is True
+        transfer = item.transfer_operator
+        assert transfer is not None
+        assert transfer.direction == "coarse_to_fine"
+        assert transfer.rows == item.global_complex_dofs
+        assert transfer.columns == item.coarse_global_complex_dofs
+        assert transfer.nonzeros > 0
+        assert transfer.constrained_fine_rows > 0
+        assert transfer.constrained_coarse_columns > 0
+        assert transfer.maximum_imaginary_abs == 0.0
+        effective = item.solver_hierarchy.effective
+        assert effective.mg_levels == 2
+        assert effective.mg_type == "multiplicative"
+        assert effective.mg_cycle_type == "v"
+        assert effective.mg_galerkin == "none"
+        assert effective.mg_fine_smoother is not None
+        assert effective.mg_fine_smoother.ksp_type == "richardson"
+        assert effective.mg_fine_smoother.pc_type == "asm"
+        assert effective.mg_fine_smoother.maximum_iterations == 1
+        assert effective.mg_fine_smoother.norm_type == "none"
+        assert effective.mg_fine_asm_type == "restrict"
+        assert effective.mg_fine_asm_overlap == 1
+        assert effective.mg_coarse_solver is not None
+        assert effective.mg_coarse_solver.pc_type == "lu"
+        assert effective.mg_coarse_solver.factor_solver_type == "mumps"
+        assert all(
+            component.pc_type == "lu"
+            and component.factor_solver_type == "mumps"
+            for component in effective.mg_fine_asm_subdomain_solvers
+        )
+
+
+@pytest.mark.heavy
+def test_p_multigrid_shift_changes_both_p_levels_but_not_physical_a() -> None:
+    pytest.importorskip("dolfinx")
+    from dolfinx.fem import petsc as fem_petsc
+    from mpi4py import MPI
+
+    solver, _ = _solver_and_ports(
+        MPI.COMM_SELF, degree=3, p_multigrid=True
+    )
+    coarse = solver.coarse_forms
+    assert coarse is not None
+    matrices = []
+
+    def assemble(form, bcs):
+        matrix = fem_petsc.assemble_matrix(form, bcs=bcs)
+        matrix.assemble()
+        matrices.append(matrix)
+        return matrix
+
+    try:
+        solver.forms.set_preconditioner_absorption_shift(0.0)
+        coarse.set_preconditioner_absorption_shift(0.0)
+        physical_zero = assemble(
+            solver.forms.bilinear_form, solver.forms.boundary_conditions
+        )
+        fine_zero = assemble(
+            solver.forms.preconditioner_bilinear_form,
+            solver.forms.boundary_conditions,
+        )
+        coarse_zero = assemble(
+            coarse.preconditioner_bilinear_form, coarse.boundary_conditions
+        )
+        solver.forms.set_preconditioner_absorption_shift(0.5)
+        coarse.set_preconditioner_absorption_shift(0.5)
+        physical_shifted = assemble(
+            solver.forms.bilinear_form, solver.forms.boundary_conditions
+        )
+        fine_shifted = assemble(
+            solver.forms.preconditioner_bilinear_form,
+            solver.forms.boundary_conditions,
+        )
+        coarse_shifted = assemble(
+            coarse.preconditioner_bilinear_form, coarse.boundary_conditions
+        )
+        assert physical_zero.equal(physical_shifted)
+        assert not fine_zero.equal(fine_shifted)
+        assert not coarse_zero.equal(coarse_shifted)
+    finally:
+        for matrix in reversed(matrices):
+            matrix.destroy()
+
+
+@pytest.mark.heavy
+def test_p_multigrid_synchronizes_material_changes_to_coarse_forms() -> None:
+    pytest.importorskip("dolfinx")
+    from dolfinx.fem import petsc as fem_petsc
+    from mpi4py import MPI
+
+    from scatter3d.fem.config import Material, MaterialMap
+
+    solver, ports = _solver_and_ports(
+        MPI.COMM_SELF,
+        absorption_shift=0.5,
+        degree=3,
+        p_multigrid=True,
+    )
+    coarse = solver.coarse_forms
+    assert coarse is not None
+    matrices = []
+
+    def assemble(form, bcs):
+        matrix = fem_petsc.assemble_matrix(form, bcs=bcs)
+        matrix.assemble()
+        matrices.append(matrix)
+        return matrix
+
+    try:
+        fine_before = assemble(
+            solver.forms.bilinear_form, solver.forms.boundary_conditions
+        )
+        coarse_before = assemble(
+            coarse.preconditioner_bilinear_form, coarse.boundary_conditions
+        )
+        replacement = MaterialMap(
+            Material(3.0, conductivity_s_per_m=0.05, name="replacement")
+        )
+        solver.forms.set_materials(replacement)
+        result = solver.solve((1.0e8,), ports, retain_solutions=False)
+        assert result.diagnostics[0].p_multigrid_operator_checks_passed is True
+        assert coarse.materials is replacement
+        fine_after = assemble(
+            solver.forms.bilinear_form, solver.forms.boundary_conditions
+        )
+        coarse_after = assemble(
+            coarse.preconditioner_bilinear_form, coarse.boundary_conditions
+        )
+        assert not fine_before.equal(fine_after)
+        assert not coarse_before.equal(coarse_after)
+    finally:
+        for matrix in reversed(matrices):
+            matrix.destroy()
+
+
+@pytest.mark.heavy
+def test_p_multigrid_typed_structure_wins_over_prefixed_external_options() -> None:
+    pytest.importorskip("dolfinx")
+    from mpi4py import MPI
+    from petsc4py import PETSc
+
+    solver, ports = _solver_and_ports(
+        MPI.COMM_SELF,
+        absorption_shift=0.5,
+        degree=3,
+        p_multigrid=True,
+    )
+    options = PETSc.Options()
+    keys = ("scatter3d_0_pc_type", "scatter3d_0_pc_mg_levels")
+    options[keys[0]] = "asm"
+    options[keys[1]] = 3
+    try:
+        result = solver.solve((1.0e8,), ports, retain_solutions=False)
+    finally:
+        for key in keys:
+            if options.hasName(key):
+                del options[key]
+    effective = result.diagnostics[0].solver_hierarchy.effective
+    assert effective.top_level.pc_type == "mg"
+    assert effective.mg_levels == 2
+
+
+@pytest.mark.heavy
+def test_p_multigrid_invalid_coarse_pc_option_is_consumed() -> None:
+    pytest.importorskip("dolfinx")
+    from mpi4py import MPI
+    from petsc4py import PETSc
+
+    from scatter3d.fem.config import LinearSolverConfig
+
+    solver, ports = _solver_and_ports(
+        MPI.COMM_SELF, degree=3, p_multigrid=True
+    )
+    solver.solver_config = LinearSolverConfig.iterative_p_multigrid(
+        maximum_iterations=1,
+        petsc_options={
+            "mg_coarse_pc_type": "scatter3d_deliberately_invalid_pc",
+        },
+    )
+    with pytest.raises(PETSc.Error):
+        solver.solve((1.0e8,), ports, retain_solutions=False)
+
+
+@pytest.mark.heavy
+@pytest.mark.mpi
+def test_p_multigrid_effective_hierarchy_is_aggregated_across_ranks() -> None:
+    pytest.importorskip("dolfinx")
+    from mpi4py import MPI
+
+    if MPI.COMM_WORLD.size < 2:
+        pytest.skip("run under mpirun -n 2 or more")
+    solver, ports = _solver_and_ports(
+        MPI.COMM_WORLD,
+        absorption_shift=0.5,
+        degree=3,
+        p_multigrid=True,
+    )
+    result = solver.solve((1.0e8,), ports, retain_solutions=False)
+    effective = result.diagnostics[0].solver_hierarchy.effective
+    assert effective.mg_fine_smoother is not None
+    assert effective.mg_fine_smoother.mpi_ranks == tuple(
+        range(MPI.COMM_WORLD.size)
+    )
+    assert effective.mg_coarse_solver is not None
+    assert effective.mg_coarse_solver.mpi_ranks == tuple(
+        range(MPI.COMM_WORLD.size)
+    )
+    covered_ranks = {
+        rank
+        for component in effective.mg_fine_asm_subdomain_solvers
+        for rank in component.mpi_ranks
+    }
+    assert covered_ranks == set(range(MPI.COMM_WORLD.size))
 
 
 @pytest.mark.heavy

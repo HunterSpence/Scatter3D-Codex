@@ -103,6 +103,43 @@ def test_petsc_option_keys_are_normalized_without_blocking_nested_tuning() -> No
         )
 
 
+def test_p_multigrid_preset_is_typed_and_reserves_structure() -> None:
+    config = LinearSolverConfig.iterative_p_multigrid(
+        coarse_degree=1,
+        preconditioner_absorption_shift=0.5,
+    )
+    assert config.is_iterative
+    assert config.uses_p_multigrid
+    assert config.pc_type == "mg"
+    assert config.p_multigrid_coarse_degree == 1
+    assert config.preconditioning_side == "right"
+    assert config.petsc_options["mg_levels_1_ksp_type"] == "richardson"
+    assert config.petsc_options["mg_levels_1_ksp_max_it"] == 1
+    assert config.petsc_options["mg_levels_1_pc_type"] == "asm"
+    assert config.petsc_options["mg_coarse_pc_type"] == "lu"
+    merged = LinearSolverConfig.iterative_p_multigrid(
+        petsc_options={"ksp_gmres_restart": 40}
+    )
+    assert merged.petsc_options["ksp_gmres_restart"] == 40
+    assert merged.petsc_options["mg_levels_1_pc_type"] == "asm"
+    assert merged.petsc_options["mg_coarse_pc_type"] == "lu"
+    assert config.canonical()["p_multigrid_coarse_degree"] == 1
+    for reserved in ("pc_mg_levels", "pc_mg_galerkin", "pc_mg_type"):
+        with pytest.raises(ValueError, match="typed top-level"):
+            LinearSolverConfig.iterative_p_multigrid(
+                petsc_options={reserved: "invalid"}
+            )
+
+
+def test_p_multigrid_requires_iterative_mg_and_valid_coarse_degree() -> None:
+    with pytest.raises(ValueError, match="requires p_multigrid_coarse_degree"):
+        LinearSolverConfig(solver_path="iterative", pc_type="mg")
+    with pytest.raises(ValueError, match="requires iterative"):
+        LinearSolverConfig(p_multigrid_coarse_degree=1)
+    with pytest.raises(ValueError, match="must be 1 or 2"):
+        LinearSolverConfig.iterative_p_multigrid(coarse_degree=3)
+
+
 def test_reference_and_dut_are_distinct_model_states() -> None:
     shared = MaterialMap(Material(1.0))
     with pytest.raises(ValueError, match="distinct MaterialMap"):

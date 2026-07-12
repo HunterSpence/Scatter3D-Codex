@@ -22,6 +22,7 @@ from .diagnostics import (
     SolverHierarchyDiagnostics,
     compare_material_models,
     parse_petsc_asm_view,
+    parse_petsc_mg_view,
     validate_effective_solver_hierarchy,
 )
 from .gmsh_io import LoadedMesh, load_gmsh_mesh
@@ -38,6 +39,7 @@ from .solver import (
     FrequencyDiagnostics,
     MaxwellSweepSolver,
     SweepResult,
+    TransferOperatorDiagnostics,
 )
 from .tags import (
     BoundaryTagContract,
@@ -71,6 +73,7 @@ __all__ = [
     "SolverHierarchyDiagnostics",
     "SweepResult",
     "TagContractError",
+    "TransferOperatorDiagnostics",
     "UncalibratedSurfaceCurrentExcitation",
     "VolumeTagContract",
     "checkpoint_fingerprint",
@@ -78,6 +81,7 @@ __all__ = [
     "load_gmsh_mesh",
     "normalize_port_mode",
     "parse_petsc_asm_view",
+    "parse_petsc_mg_view",
     "sha256_file",
     "total_electric_modal_coefficient",
     "validate_effective_solver_hierarchy",
