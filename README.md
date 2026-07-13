@@ -32,8 +32,8 @@ prove that a particular fixture, calibration, material model, or linearized
 inverse problem contains enough information to image a real object.
 
 The latest identified automated gates are retained by [GitHub Actions run
-29212215039](https://github.com/HunterSpence/Scatter3D-Codex/actions/runs/29212215039)
-at `bee9e9d`. Earlier manufactured-solution numbers are retained by [run
+29214242189](https://github.com/HunterSpence/Scatter3D-Codex/actions/runs/29214242189)
+at `d5fe814`. Earlier manufactured-solution history is also retained by [run
 29206335149](https://github.com/HunterSpence/Scatter3D-Codex/actions/runs/29206335149).
 The larger remote solver evidence, including failures and SHA-256 hashes, is
 catalogued in [Scaling evidence](docs/SCALING_EVIDENCE.md).
@@ -227,6 +227,7 @@ docker/                 digest-pinned complex numerical runtime
 
 ## Documentation
 
+- [Continuation handoff for the registered remote sweep](docs/CONTINUATION_HANDOFF_2026-07-13.md)
 - [Measurement runbook](docs/MEASUREMENT_RUNBOOK.md)
 - [Convergence protocol](docs/CONVERGENCE_PROTOCOL.md)
 - [Architecture](docs/ARCHITECTURE.md)
