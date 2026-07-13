@@ -64,6 +64,10 @@ current repository state, not completed hardware or scaling acceptance.
 - Included the immutable scaling-sweep JSON specification in source distributions
   and added a package gate that rejects an sdist missing the registration script,
   executor, or registered experiment contract.
+- Stopped multi-entry scaling execution after the first non-passing result so a
+  `BLOCKED` or unsafe `FAILED` entry cannot silently launch the next registered
+  solve; a reviewed numerical failure can resume only through an explicit
+  unstarted `--run-id`.
 
 ### Security
 

@@ -1179,7 +1179,7 @@ def execute_registered_entries(
     cleanup_stable_checks: int = 10,
     cleanup_max_checks: int = 60,
 ) -> list[dict[str, Any]]:
-    """Run every registered entry, preserving evidence and continuing on failure."""
+    """Run selected entries, preserving evidence and stopping on non-passing evidence."""
     host_output_root = output_parent.expanduser().resolve() / Path(
         str(registration["output_root"])
     )
@@ -1651,6 +1651,8 @@ def execute_registered_entries(
                 "inconsistent fem_smoke/Docker evidence was preserved; "
                 "refusing to launch another registered run"
             )
+        if status != "PASSED":
+            break
     return summaries
 
 

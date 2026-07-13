@@ -512,9 +512,11 @@ esac
 ```
 
 The executor exits nonzero for an honest `FAILED` run. Preserve the directory
-and continue to the next pre-registered parameter when the failure is numerical.
-Do not rerun or overwrite the same run ID. An interrupted entry remains preserved;
-only remaining unstarted IDs can proceed.
+and inspect it before continuing. The executor stops a multi-ID invocation after
+any `FAILED` or `BLOCKED` entry; after independently confirming a numerical-only
+failure and a safe runner/evidence state, launch the next unstarted registered ID
+explicitly with `--run-id`. Do not rerun or overwrite the same run ID. An
+interrupted entry remains preserved; only remaining unstarted IDs can proceed.
 
 Stop immediately for corrupted evidence, source/image mismatch, missing cgroup
 instrumentation, Docker instability, disk pressure, unsafe resource state, or

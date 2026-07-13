@@ -913,6 +913,43 @@ def test_executor_can_select_remaining_registered_run_after_interruption(
     assert summaries[0]["container_cleanup_attempted"] is False
 
 
+def test_executor_stops_before_next_registered_run_after_blocked(
+    tmp_path: Path,
+) -> None:
+    registration = _registration()
+    registration["entries"] = registration["entries"][:2]
+    first, second = registration["entries"]
+    first_directory = tmp_path / registration["output_root"] / first["run_id"]
+    second_directory = tmp_path / registration["output_root"] / second["run_id"]
+    create_count = 0
+
+    def blocked_runner(command, **kwargs):
+        nonlocal create_count
+        del kwargs
+        if command[:2] == ["docker", "create"]:
+            create_count += 1
+            return subprocess.CompletedProcess(command, 1, b"", b"capacity")
+        if command[:3] == ["docker", "rm", "--force"]:
+            raise AssertionError("ordinary create failure must not remove by name")
+        if command[:2] == ["docker", "ps"]:
+            return subprocess.CompletedProcess(command, 0, b"", b"")
+        raise AssertionError(command)
+
+    summaries = run_registered_scaling_sweep.execute_registered_entries(
+        registration,
+        image_reference=registration["images"]["project_image"]["identity"],
+        output_parent=tmp_path,
+        runner=blocked_runner,
+    )
+    assert create_count == 1
+    assert len(summaries) == 1
+    assert summaries[0]["run_id"] == first["run_id"]
+    assert summaries[0]["status"] == "BLOCKED"
+    assert first_directory.joinpath("exit-code.json").is_file()
+    assert first_directory.joinpath("SHA256SUMS").is_file()
+    assert not second_directory.exists()
+
+
 def test_docker_create_timeout_still_cleans_deterministic_container_name(
     tmp_path: Path,
 ) -> None:
@@ -1157,15 +1194,18 @@ def test_executor_rejects_positive_host_cgroup_oom_without_oom_kill(
     tmp_path: Path,
 ) -> None:
     registration = _registration()
-    registration["entries"] = registration["entries"][:1]
-    entry = registration["entries"][0]
+    registration["entries"] = registration["entries"][:2]
+    entry, second = registration["entries"]
     run_directory = tmp_path / registration["output_root"] / entry["run_id"]
+    second_directory = tmp_path / registration["output_root"] / second["run_id"]
+    create_count = 0
     inspect_count = 0
 
     def runner(command, **kwargs):
-        nonlocal inspect_count
+        nonlocal create_count, inspect_count
         del kwargs
         if command[:2] == ["docker", "create"]:
+            create_count += 1
             return subprocess.CompletedProcess(command, 0, b"container-id\n", b"")
         if command[:2] == ["docker", "start"]:
             run_directory.joinpath(".executor-ready").touch()
@@ -1224,13 +1264,17 @@ def test_executor_rejects_positive_host_cgroup_oom_without_oom_kill(
         "swap_limit_bytes": 0,
         "events": {"oom": 1, "oom_kill": 0, "max": 1},
     }
-    result = run_registered_scaling_sweep.execute_registered_entries(
+    summaries = run_registered_scaling_sweep.execute_registered_entries(
         registration,
         image_reference=registration["images"]["project_image"]["identity"],
         output_parent=tmp_path,
         runner=runner,
         **cgroup,
-    )[0]
+    )
+    result = summaries[0]
+    assert create_count == 1
+    assert len(summaries) == 1
+    assert not second_directory.exists()
     assert result["status"] == "FAILED"
     assert "OOM activity" in result["reason"]
 
