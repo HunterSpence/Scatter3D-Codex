@@ -1,0 +1,49 @@
+{
+  "attempt": "campaign-03",
+  "cleanup": {
+    "ephemeral_ssh_key": "PASSED",
+    "firewall": "PASSED",
+    "independent_absence_check": "PASSED",
+    "primary_ip": "PASSED",
+    "server": "PASSED"
+  },
+  "control": {
+    "build_id": "scatter3d-provider-control-v2.3-20260713-04",
+    "controller_sha256": "2ef0cb8cf036268b6e2e05cb006511f05de609389253f60ebcc08af197d6c8c4",
+    "preparation_script_sha256": "c98f62f8db0c6ee410b8b0e003af96be333c3d72c20514ab5c7345f3c975f521",
+    "transport_sha256": "41d5761dd4e4258ed6a53452f2094363bc83177361bdf3516e12f1bad10154fc"
+  },
+  "failure": {
+    "message": "df: options -P and --output are mutually exclusive",
+    "phase": "remote_preparation",
+    "status": "FAILED"
+  },
+  "gates": {
+    "bootstrap": "PASSED",
+    "image_build": "NOT RUN",
+    "immutable_registration": "NOT RUN",
+    "lifecycle_canary": "NOT RUN",
+    "p3_pmg_scaling_sweep": "NOT RUN",
+    "runner_attestation": "PASSED",
+    "source_checkout": "NOT RUN",
+    "wrong_dof_canary": "NOT RUN"
+  },
+  "private_archive_hashes": {
+    "campaign_manifest_sha256": "77d6a44e09e0876500849c507122d3b7f926b285c235affc52f79013b6383e42",
+    "ephemeral_ssh_state_sha256": "1ec325d64a1b277d659cbf23a448248367929f6a254ea6b94170effe18125645",
+    "partial_preparation_tar_sha256": "8f4d3ded40f315df00a6b06f56fab8e427f820ad50c13f4a389aa60288bb44c1",
+    "provider_deleted_state_sha256": "0f587a296cf35c16074c6d802e8884967d531dd25ae178a0f65e17e3c086d906"
+  },
+  "runner_contract": {
+    "location": "fsn1",
+    "server_type": "cpx62"
+  },
+  "schema": "scatter3d.evidence.remote_preparation_failure/v1",
+  "solver_attempts": 0,
+  "source": {
+    "ci_run": 29222225396,
+    "ci_status": "PASSED",
+    "commit": "5393e4494a5f63bdca24defba18eb7af7ffa5bf4"
+  },
+  "status": "FAILED"
+}

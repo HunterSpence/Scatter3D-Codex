@@ -23,10 +23,10 @@ def _contains_identity(root, target) -> bool:
 def test_pml_tensor_retains_live_frequency_constant() -> None:
     pytest.importorskip("dolfinx")
     pytest.importorskip("ufl")
+    import ufl
     from dolfinx import fem, mesh
     from mpi4py import MPI
     from petsc4py import PETSc
-    import ufl
 
     from scatter3d.fem.config import PMLConfig
     from scatter3d.fem.pml import cartesian_pml_tensor

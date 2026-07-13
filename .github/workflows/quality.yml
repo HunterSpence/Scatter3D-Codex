@@ -9,47 +9,419 @@ on:
 permissions:
   contents: read
 
+env:
+  SCATTER3D_BASE_IMAGE_DIGEST: sha256:f7cce2a2271bf838c080751348c471064acb41fef0330e2c08178a688f71890d
+  SCATTER3D_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+
 concurrency:
-  group: quality-${{ github.ref }}
+  group: quality-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+defaults:
+  run:
+    shell: bash
+
 jobs:
+  gate-a-static:
+    name: Gate A / repository static checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ env.SCATTER3D_SOURCE_SHA }}
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12"
+      - name: Install pinned metadata validator
+        run: python -m pip install --disable-pip-version-check cffconvert==2.0.0
+      - name: Install checksummed static tools
+        env:
+          ACTIONLINT_VERSION: "1.7.12"
+          ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+          GITLEAKS_VERSION: "8.30.1"
+          GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+        run: |
+          set -euo pipefail
+          actionlint_archive="${RUNNER_TEMP}/actionlint.tar.gz"
+          gitleaks_archive="${RUNNER_TEMP}/gitleaks.tar.gz"
+          curl --proto '=https' --tlsv1.2 --fail --location --silent --show-error \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz" \
+            --output "${actionlint_archive}"
+          printf '%s  %s\n' "${ACTIONLINT_SHA256}" "${actionlint_archive}" | sha256sum --check
+          tar --extract --gzip --file "${actionlint_archive}" --directory "${RUNNER_TEMP}" actionlint
+          curl --proto '=https' --tlsv1.2 --fail --location --silent --show-error \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
+            --output "${gitleaks_archive}"
+          printf '%s  %s\n' "${GITLEAKS_SHA256}" "${gitleaks_archive}" | sha256sum --check
+          tar --extract --gzip --file "${gitleaks_archive}" --directory "${RUNNER_TEMP}" gitleaks
+      - name: Validate GitHub Actions workflows
+        run: |
+          "${RUNNER_TEMP}/actionlint" -color
+      - name: Validate Compose and Bash syntax
+        run: |
+          docker compose --file docker/compose.yaml config --quiet
+          bash -n examples/run_container_verification.sh
+      - name: Validate citation metadata
+        run: cffconvert --validate
+      - name: Verify public evidence manifests and status contract
+        run: |
+          set -euo pipefail
+          (cd docs/evidence && sha256sum --check SHA256SUMS)
+          python - <<'PY'
+          from __future__ import annotations
+
+          import json
+          import re
+          from pathlib import Path
+
+          evidence = Path("docs/evidence")
+          manifest_digests: dict[str, str] = {}
+          for line in (evidence / "SHA256SUMS").read_text(encoding="utf-8").splitlines():
+              digest, separator, name = line.partition("  ")
+              if (
+                  len(digest) != 64
+                  or any(character not in "0123456789abcdef" for character in digest)
+                  or separator != "  "
+                  or not name
+                  or Path(name).name != name
+              ):
+                  raise SystemExit("docs/evidence/SHA256SUMS has an invalid entry")
+              if name in manifest_digests:
+                  raise SystemExit("docs/evidence/SHA256SUMS has a duplicate entry")
+              manifest_digests[name] = digest
+
+          json_names = {path.name for path in evidence.glob("*.json") if path.is_file()}
+          if set(manifest_digests) != json_names:
+              raise SystemExit(
+                  "docs/evidence/SHA256SUMS must cover every and only public JSON artifact"
+              )
+
+          report = json.loads(
+              (evidence / "campaign-03-preparation-failure.json").read_text(encoding="utf-8")
+          )
+          expected_top_keys = {
+              "attempt",
+              "cleanup",
+              "control",
+              "failure",
+              "gates",
+              "private_archive_hashes",
+              "runner_contract",
+              "schema",
+              "solver_attempts",
+              "source",
+              "status",
+          }
+          if set(report) != expected_top_keys:
+              raise SystemExit("campaign-03 evidence has unexpected top-level fields")
+
+          required_scalars = {
+              "attempt": "campaign-03",
+              "schema": "scatter3d.evidence.remote_preparation_failure/v1",
+              "status": "FAILED",
+          }
+          for key, expected in required_scalars.items():
+              if report.get(key) != expected:
+                  raise SystemExit(f"campaign-03 evidence has invalid {key}")
+          solver_attempts = report.get("solver_attempts")
+          if type(solver_attempts) is not int or solver_attempts != 0:
+              raise SystemExit("campaign-03 solver_attempts must be integer zero")
+
+          expected_maps = {
+              "cleanup": {
+                  "ephemeral_ssh_key": "PASSED",
+                  "firewall": "PASSED",
+                  "independent_absence_check": "PASSED",
+                  "primary_ip": "PASSED",
+                  "server": "PASSED",
+              },
+              "control": {
+                  "build_id": "scatter3d-provider-control-v2.3-20260713-04",
+                  "controller_sha256": "2ef0cb8cf036268b6e2e05cb006511f05de609389253f60ebcc08af197d6c8c4",
+                  "preparation_script_sha256": "c98f62f8db0c6ee410b8b0e003af96be333c3d72c20514ab5c7345f3c975f521",
+                  "transport_sha256": "41d5761dd4e4258ed6a53452f2094363bc83177361bdf3516e12f1bad10154fc",
+              },
+              "failure": {
+                  "message": "df: options -P and --output are mutually exclusive",
+                  "phase": "remote_preparation",
+                  "status": "FAILED",
+              },
+              "gates": {
+                  "bootstrap": "PASSED",
+                  "image_build": "NOT RUN",
+                  "immutable_registration": "NOT RUN",
+                  "lifecycle_canary": "NOT RUN",
+                  "p3_pmg_scaling_sweep": "NOT RUN",
+                  "runner_attestation": "PASSED",
+                  "source_checkout": "NOT RUN",
+                  "wrong_dof_canary": "NOT RUN",
+              },
+              "private_archive_hashes": {
+                  "campaign_manifest_sha256": "77d6a44e09e0876500849c507122d3b7f926b285c235affc52f79013b6383e42",
+                  "ephemeral_ssh_state_sha256": "1ec325d64a1b277d659cbf23a448248367929f6a254ea6b94170effe18125645",
+                  "partial_preparation_tar_sha256": "8f4d3ded40f315df00a6b06f56fab8e427f820ad50c13f4a389aa60288bb44c1",
+                  "provider_deleted_state_sha256": "0f587a296cf35c16074c6d802e8884967d531dd25ae178a0f65e17e3c086d906",
+              },
+              "runner_contract": {"location": "fsn1", "server_type": "cpx62"},
+              "source": {
+                  "ci_run": 29222225396,
+                  "ci_status": "PASSED",
+                  "commit": "5393e4494a5f63bdca24defba18eb7af7ffa5bf4",
+              },
+          }
+          for key, expected in expected_maps.items():
+              if report.get(key) != expected:
+                  raise SystemExit(f"campaign-03 evidence has invalid {key} map")
+
+          scaling_text = Path("docs/SCALING_EVIDENCE.md").read_text(encoding="utf-8")
+          digest_match = re.search(
+              r"The public JSON has SHA-256\s+`([0-9a-f]{64})`",
+              scaling_text,
+          )
+          expected_digest = manifest_digests["campaign-03-preparation-failure.json"]
+          if digest_match is None or digest_match.group(1) != expected_digest:
+              raise SystemExit("scaling evidence cites a stale public JSON digest")
+          private_digest_match = re.search(
+              r"canonical private archive manifest has SHA-256\s+`([0-9a-f]{64})`",
+              scaling_text,
+          )
+          expected_private_digest = report["private_archive_hashes"][
+              "campaign_manifest_sha256"
+          ]
+          if (
+              private_digest_match is None
+              or private_digest_match.group(1) != expected_private_digest
+          ):
+              raise SystemExit("scaling evidence cites a stale private archive digest")
+          print("public evidence manifest and status contract verify")
+          PY
+      - name: Validate repository-local Markdown links
+        run: |
+          python - <<'PY'
+          from __future__ import annotations
+
+          import re
+          from pathlib import Path
+          from urllib.parse import unquote, urlsplit
+
+          root = Path.cwd().resolve()
+          ignored_parts = {
+              ".git",
+              ".mypy_cache",
+              ".nox",
+              ".pytest_cache",
+              ".ruff_cache",
+              ".tox",
+              ".venv",
+              "build",
+              "dist",
+              "htmlcov",
+          }
+          link_pattern = re.compile(r"(?<!!)\[[^]]+\]\((<[^>]+>|[^\s)]+)")
+          failures: list[str] = []
+
+          for markdown_path in sorted(root.rglob("*.md")):
+              if ignored_parts.intersection(markdown_path.relative_to(root).parts):
+                  continue
+              text = markdown_path.read_text(encoding="utf-8")
+              for match in link_pattern.finditer(text):
+                  raw_target = match.group(1).strip("<>")
+                  parsed = urlsplit(raw_target)
+                  if parsed.scheme or parsed.netloc or raw_target.startswith("#"):
+                      continue
+                  relative_target = unquote(parsed.path)
+                  if not relative_target:
+                      continue
+                  resolved = (markdown_path.parent / relative_target).resolve()
+                  try:
+                      resolved.relative_to(root)
+                  except ValueError:
+                      failures.append(
+                          f"{markdown_path.relative_to(root)}: target leaves repository: {raw_target}"
+                      )
+                      continue
+                  if not resolved.exists():
+                      failures.append(
+                          f"{markdown_path.relative_to(root)}: missing target: {raw_target}"
+                      )
+
+          if failures:
+              raise SystemExit("\n".join(failures))
+          print("repository-local Markdown links resolve")
+          PY
+      - name: Scan committed history and working tree for secrets
+        run: |
+          "${RUNNER_TEMP}/gitleaks" git --no-banner --no-color --redact .
+          "${RUNNER_TEMP}/gitleaks" dir --no-banner --no-color --redact .
+
   pure-python:
     name: Pure Python / ${{ matrix.python-version }}
-    runs-on: ubuntu-latest
+    needs: gate-a-static
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.11", "3.12"]
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+          ref: ${{ env.SCATTER3D_SOURCE_SHA }}
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
+          cache-dependency-path: pyproject.toml
       - name: Install
-        run: python -m pip install --upgrade pip && python -m pip install -e ".[test]"
+        run: |
+          python -m pip install --disable-pip-version-check -e ".[test]"
+          python -m pip check
       - name: Lint
         run: python -m ruff check .
       - name: Test pure paths
-        run: python -m pytest -m "not heavy and not mpi" --cov=scatter3d --cov-report=term-missing
-      - name: Build distributions
-        run: python -m build
+        run: >-
+          python -m pytest -p no:cacheprovider -W error
+          -m "not heavy and not mpi"
+          --cov=scatter3d --cov-report=term-missing
+
+  package-distributions:
+    name: Gate A / build and install distributions
+    needs: gate-a-static
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+          ref: ${{ env.SCATTER3D_SOURCE_SHA }}
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Build wheel and source distribution
+        run: |
+          python -m pip install --disable-pip-version-check build==1.2.2.post1
+          python -m build
+      - name: Verify source-distribution experiment contract
+        run: |
+          python - <<'PY'
+          from pathlib import Path, PurePosixPath
+          import tarfile
+
+          archives = list(Path("dist").glob("*.tar.gz"))
+          if len(archives) != 1:
+              raise SystemExit(f"expected exactly one source distribution, found {archives}")
+          expected_root = archives[0].name.removesuffix(".tar.gz")
+
+          required = {
+              PurePosixPath("docs/evidence/SHA256SUMS"),
+              PurePosixPath("docs/evidence/campaign-03-preparation-failure.json"),
+              PurePosixPath("validation/register_scaling_sweep.py"),
+              PurePosixPath("validation/remote_capacity_preflight.py"),
+              PurePosixPath("validation/run_registered_scaling_sweep.py"),
+              PurePosixPath("validation/scaling_sweep_v1.json"),
+          }
+          with tarfile.open(archives[0], "r:gz") as archive:
+              entries = {}
+              for member in archive.getmembers():
+                  path = PurePosixPath(member.name)
+                  if path.is_absolute() or ".." in path.parts:
+                      raise SystemExit(
+                          f"source distribution contains unsafe path: {member.name!r}"
+                      )
+                  if not path.parts or path.parts[0] != expected_root:
+                      raise SystemExit(
+                          "source distribution does not have exactly the expected root: "
+                          f"{member.name!r} versus {expected_root!r}"
+                      )
+                  if len(path.parts) > 1:
+                      relative = PurePosixPath(*path.parts[1:])
+                      entries.setdefault(relative, []).append(member)
+              invalid = sorted(
+                  path
+                  for path in required
+                  if len(entries.get(path, [])) != 1 or not entries[path][0].isfile()
+              )
+              if invalid:
+                  raise SystemExit(
+                      "source distribution must contain each required experiment/evidence file "
+                      f"exactly once as a regular file: {invalid}"
+                  )
+              mismatched = []
+              for path in sorted(required):
+                  archived = archive.extractfile(entries[path][0])
+                  if archived is None or archived.read() != Path(*path.parts).read_bytes():
+                      mismatched.append(path)
+              if mismatched:
+                  raise SystemExit(
+                      "source distribution experiment/evidence files differ from the checkout: "
+                      f"{mismatched}"
+                  )
+          print("source distribution retains the scaling contract and cited evidence")
+          PY
+      - name: Verify wheel and source-distribution installs
+        run: |
+          set -euo pipefail
+          python -m venv "${RUNNER_TEMP}/wheel-venv"
+          "${RUNNER_TEMP}/wheel-venv/bin/python" -m pip install --disable-pip-version-check dist/*.whl
+          "${RUNNER_TEMP}/wheel-venv/bin/python" -m pip check
+          "${RUNNER_TEMP}/wheel-venv/bin/scatter3d" --help
+          python -m venv "${RUNNER_TEMP}/sdist-venv"
+          "${RUNNER_TEMP}/sdist-venv/bin/python" -m pip install --disable-pip-version-check dist/*.tar.gz
+          "${RUNNER_TEMP}/sdist-venv/bin/python" -m pip check
+          "${RUNNER_TEMP}/sdist-venv/bin/scatter3d" --help
+      - name: Archive distributions
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: scatter3d-python-distributions
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
 
   heavy-dolfinx:
     name: Complex DOLFINx heavy tests
-    runs-on: ubuntu-latest
+    needs: [pure-python, package-distributions]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+          ref: ${{ env.SCATTER3D_SOURCE_SHA }}
       - name: Build pinned image
-        run: docker build -f docker/Dockerfile -t scatter3d-codex:ci .
+        run: >-
+          docker build --pull=false
+          --build-arg SCATTER3D_GIT_COMMIT="${SCATTER3D_SOURCE_SHA}"
+          --build-arg SCATTER3D_GIT_DIRTY=false
+          -f docker/Dockerfile -t scatter3d-codex:ci .
+      - name: Record local project image identity
+        run: |
+          project_image_id="$(docker image inspect --format '{{.Id}}' scatter3d-codex:ci)"
+          if [[ ! "${project_image_id}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "invalid local project image ID: ${project_image_id}" >&2
+            exit 1
+          fi
+          echo "SCATTER3D_PROJECT_IMAGE_ID=${project_image_id}" >> "${GITHUB_ENV}"
       - name: Run heavy tests and reject skips
         run: |
-          docker run --rm scatter3d-codex:ci bash -euc '
-            python3 -m pytest -m "heavy and not mpi" -ra --junitxml=/tmp/heavy.xml
+          mkdir -p "${RUNNER_TEMP}/scatter3d-heavy"
+          chmod 0777 "${RUNNER_TEMP}/scatter3d-heavy"
+          set +e
+          docker run --rm \
+            --env SCATTER3D_PROJECT_IMAGE_ID \
+            --env SCATTER3D_BASE_IMAGE_DIGEST \
+            --volume "${RUNNER_TEMP}/scatter3d-heavy:/artifacts" \
+            scatter3d-codex:ci bash -euc '
+            python3 -m pytest -p no:cacheprovider -W error -m "heavy and not mpi" -ra --junitxml=/artifacts/heavy-junit.xml
             python3 - <<"PY"
           import xml.etree.ElementTree as ET
-          root = ET.parse("/tmp/heavy.xml").getroot()
+          root = ET.parse("/artifacts/heavy-junit.xml").getroot()
           suites = [root] if root.tag == "testsuite" else list(root.findall("testsuite"))
           tests = sum(int(s.get("tests", 0)) for s in suites)
           skipped = sum(int(s.get("skipped", 0)) for s in suites)
@@ -57,25 +429,100 @@ jobs:
               raise SystemExit(f"heavy verification invalid: tests={tests}, skipped={skipped}")
           print(f"heavy verification complete: tests={tests}, skipped={skipped}")
           PY
-          '
+            python3 validation/manufactured_hcurl.py \
+              --degrees 1 2 3 \
+              --subdivisions 3 4 6 \
+              --output /artifacts/manufactured-hcurl.json
+            python3 validation/fem_smoke.py \
+              --solver direct \
+              --degree 3 \
+              --subdivisions 2 \
+              --frequencies-hz 1.0e8 \
+              --output /artifacts/fem-smoke-direct-p3.json
+            python3 validation/fem_smoke.py \
+              --solver iterative \
+              --iterative-hierarchy p-multigrid \
+              --p-multigrid-coarse-degree 1 \
+              --preconditioner-absorption-shift 0.5 \
+              --iterative-local-pc lu \
+              --degree 3 \
+              --subdivisions 2 \
+              --frequencies-hz 1.0e8 \
+              --output /artifacts/fem-smoke-pmg-serial-p3-p1.json
+            cp /opt/scatter3d/runtime-metadata.json /artifacts/runtime-metadata.json
+          ' 2>&1 | tee "${RUNNER_TEMP}/scatter3d-heavy/execution.log"
+          pipeline_status=("${PIPESTATUS[@]}")
+          docker_status="${pipeline_status[0]}"
+          tee_status="${pipeline_status[1]}"
+          set -e
+          printf 'docker=%s\ntee=%s\n' "${docker_status}" "${tee_status}" \
+            > "${RUNNER_TEMP}/scatter3d-heavy/pipeline-exit-codes.txt"
+          status="${docker_status}"
+          if [[ "${status}" -eq 0 ]]; then status="${tee_status}"; fi
+          printf '%s\n' "${status}" > "${RUNNER_TEMP}/scatter3d-heavy/exit-code.txt"
+          exit "${status}"
+      - name: Finalize heavy evidence hashes
+        if: always()
+        run: |
+          cd "${RUNNER_TEMP}/scatter3d-heavy"
+          unreadable="$(find . -maxdepth 1 -type f ! -perm -004 -print)"
+          test -z "${unreadable}"
+          manifest="${RUNNER_TEMP}/scatter3d-heavy-SHA256SUMS.tmp"
+          find . -maxdepth 1 -type f ! -name SHA256SUMS -printf '%f\0' \
+            | sort -z | xargs -0 -r sha256sum > "${manifest}"
+          mv "${manifest}" SHA256SUMS
+      - name: Archive heavy verification evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: scatter3d-heavy-verification-${{ env.SCATTER3D_SOURCE_SHA }}
+          path: ${{ runner.temp }}/scatter3d-heavy/*
+          if-no-files-found: error
+          retention-days: 30
 
   mpi:
     name: Two-rank MPI tests
-    runs-on: ubuntu-latest
+    needs: [pure-python, package-distributions]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+          ref: ${{ env.SCATTER3D_SOURCE_SHA }}
       - name: Build pinned image
-        run: docker build -f docker/Dockerfile -t scatter3d-codex:ci .
+        run: >-
+          docker build --pull=false
+          --build-arg SCATTER3D_GIT_COMMIT="${SCATTER3D_SOURCE_SHA}"
+          --build-arg SCATTER3D_GIT_DIRTY=false
+          -f docker/Dockerfile -t scatter3d-codex:ci .
+      - name: Record local project image identity
+        run: |
+          project_image_id="$(docker image inspect --format '{{.Id}}' scatter3d-codex:ci)"
+          if [[ ! "${project_image_id}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "invalid local project image ID: ${project_image_id}" >&2
+            exit 1
+          fi
+          echo "SCATTER3D_PROJECT_IMAGE_ID=${project_image_id}" >> "${GITHUB_ENV}"
       - name: Run on two ranks and reject skips
         run: |
-          docker run --rm --ipc=host scatter3d-codex:ci bash -euc '
+          mkdir -p "${RUNNER_TEMP}/scatter3d-mpi"
+          chmod 0777 "${RUNNER_TEMP}/scatter3d-mpi"
+          set +e
+          docker run --rm --ipc=host \
+            --env SCATTER3D_PROJECT_IMAGE_ID \
+            --env SCATTER3D_BASE_IMAGE_DIGEST \
+            --volume "${RUNNER_TEMP}/scatter3d-mpi:/artifacts" \
+            scatter3d-codex:ci bash -euc '
             mpirun -n 2 sh -euc '\''
-              python3 -m pytest -m mpi -ra --junitxml=/tmp/mpi-${OMPI_COMM_WORLD_RANK}.xml
+              rank="${PMI_RANK:-${OMPI_COMM_WORLD_RANK:-}}"
+              test -n "${rank}"
+              python3 -m pytest -p no:cacheprovider -W error -m mpi -ra --junitxml="/artifacts/mpi-${rank}-junit.xml"
             '\''
             python3 - <<"PY"
           import glob
           import xml.etree.ElementTree as ET
-          files = glob.glob("/tmp/mpi-*.xml")
+          files = glob.glob("/artifacts/mpi-*-junit.xml")
           if len(files) != 2:
               raise SystemExit(f"expected two MPI reports, found {files}")
           for path in files:
@@ -87,4 +534,49 @@ jobs:
                   raise SystemExit(f"MPI verification invalid in {path}: tests={tests}, skipped={skipped}")
           print("MPI verification complete on two ranks with no skips")
           PY
-          '
+            mpirun -n 2 python3 validation/fem_smoke.py \
+              --solver iterative \
+              --degree 1 \
+              --subdivisions 2 \
+              --frequencies-hz 1.0e8 \
+              --output /artifacts/fem-smoke-iterative-mpi2.json
+            mpirun -n 2 python3 validation/fem_smoke.py \
+              --solver iterative \
+              --iterative-hierarchy p-multigrid \
+              --p-multigrid-coarse-degree 1 \
+              --preconditioner-absorption-shift 0.5 \
+              --iterative-local-pc lu \
+              --degree 3 \
+              --subdivisions 2 \
+              --frequencies-hz 1.0e8 \
+              --output /artifacts/fem-smoke-pmg-mpi2-p3-p1.json
+            cp /opt/scatter3d/runtime-metadata.json /artifacts/runtime-metadata.json
+          ' 2>&1 | tee "${RUNNER_TEMP}/scatter3d-mpi/execution.log"
+          pipeline_status=("${PIPESTATUS[@]}")
+          docker_status="${pipeline_status[0]}"
+          tee_status="${pipeline_status[1]}"
+          set -e
+          printf 'docker=%s\ntee=%s\n' "${docker_status}" "${tee_status}" \
+            > "${RUNNER_TEMP}/scatter3d-mpi/pipeline-exit-codes.txt"
+          status="${docker_status}"
+          if [[ "${status}" -eq 0 ]]; then status="${tee_status}"; fi
+          printf '%s\n' "${status}" > "${RUNNER_TEMP}/scatter3d-mpi/exit-code.txt"
+          exit "${status}"
+      - name: Finalize MPI evidence hashes
+        if: always()
+        run: |
+          cd "${RUNNER_TEMP}/scatter3d-mpi"
+          unreadable="$(find . -maxdepth 1 -type f ! -perm -004 -print)"
+          test -z "${unreadable}"
+          manifest="${RUNNER_TEMP}/scatter3d-mpi-SHA256SUMS.tmp"
+          find . -maxdepth 1 -type f ! -name SHA256SUMS -printf '%f\0' \
+            | sort -z | xargs -0 -r sha256sum > "${manifest}"
+          mv "${manifest}" SHA256SUMS
+      - name: Archive MPI verification evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: scatter3d-mpi-verification-${{ env.SCATTER3D_SOURCE_SHA }}
+          path: ${{ runner.temp }}/scatter3d-mpi/*
+          if-no-files-found: error
+          retention-days: 30

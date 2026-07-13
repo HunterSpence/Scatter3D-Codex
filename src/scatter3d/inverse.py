@@ -99,15 +99,15 @@ class RepeatNoiseEstimate:
     """Noise statistics from paired DUT-minus-reference repeats."""
 
     mean_differential: np.ndarray
-    variance: np.ndarray
+    sample_variance: np.ndarray
     repeat_count: int
     observation_shape: tuple[int, int, int, int]
-    covariance: np.ndarray | None = None
+    sample_covariance: np.ndarray | None = None
     diagnostics: Mapping[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         mean = _readonly(self.mean_differential, np.complex128)
-        variance = _readonly(self.variance, np.float64)
+        variance = _readonly(self.sample_variance, np.float64)
         expected = int(np.prod(self.observation_shape, dtype=np.int64))
         if self.repeat_count < 2:
             raise ValueError("at least two paired repeats are required")
@@ -120,7 +120,7 @@ class RepeatNoiseEstimate:
         if not np.all(np.isfinite(variance)) or np.any(variance < 0.0):
             raise ValueError("variance must be finite and non-negative")
 
-        covariance = self.covariance
+        covariance = self.sample_covariance
         if covariance is not None:
             covariance = _readonly(covariance, np.complex128)
             if covariance.shape != (expected, expected):
@@ -132,18 +132,32 @@ class RepeatNoiseEstimate:
             ):
                 raise ValueError("covariance diagonal does not match variance")
         object.__setattr__(self, "mean_differential", mean)
-        object.__setattr__(self, "variance", variance)
-        object.__setattr__(self, "covariance", covariance)
+        object.__setattr__(self, "sample_variance", variance)
+        object.__setattr__(self, "sample_covariance", covariance)
         object.__setattr__(self, "diagnostics", MappingProxyType(dict(self.diagnostics)))
 
-    def diagonal_model(
+    @property
+    def mean_variance(self) -> np.ndarray:
+        """Variance of ``mean_differential`` under independent paired repeats."""
+
+        return _readonly(self.sample_variance / self.repeat_count, np.float64)
+
+    @property
+    def mean_covariance(self) -> np.ndarray | None:
+        """Covariance of ``mean_differential`` when dense covariance was requested."""
+
+        if self.sample_covariance is None:
+            return None
+        return _readonly(self.sample_covariance / self.repeat_count, np.complex128)
+
+    def mean_diagonal_model(
         self,
         *,
         relative_floor: float = 1.0e-12,
         absolute_floor: float = 0.0,
     ) -> DiagonalNoiseModel:
         return DiagonalNoiseModel.from_variance(
-            self.variance,
+            self.mean_variance,
             relative_floor=relative_floor,
             absolute_floor=absolute_floor,
         )
@@ -151,16 +165,25 @@ class RepeatNoiseEstimate:
 
 def _repeat_stack(
     repeats: np.ndarray | Sequence[ScatteringDataset], *, name: str
-) -> tuple[np.ndarray, tuple[int, int, int, int]]:
+) -> tuple[np.ndarray, tuple[int, int, int, int], ScatteringDataset | None]:
     if isinstance(repeats, np.ndarray):
-        stack = np.asarray(repeats, dtype=np.complex128)
+        raw = np.asarray(repeats)
+        if not np.issubdtype(raw.dtype, np.complexfloating):
+            raise ValueError(f"{name} must use a complex dtype")
+        stack = np.asarray(raw, dtype=np.complex128)
         if stack.ndim != 5:
             raise ValueError(
                 f"{name} must have shape [repeat, angle, frequency, receiver, source]"
             )
+        if any(size <= 0 for size in stack.shape):
+            raise ValueError(f"{name} axes must all be non-empty")
         if stack.shape[3] != stack.shape[4]:
             raise ValueError(f"{name} receiver/source port counts differ")
-        return stack, tuple(int(n) for n in stack.shape[1:])  # type: ignore[return-value]
+        return (
+            stack,
+            tuple(int(n) for n in stack.shape[1:]),  # type: ignore[arg-type]
+            None,
+        )
 
     datasets = tuple(repeats)
     if not datasets:
@@ -170,7 +193,7 @@ def _repeat_stack(
     first = datasets[0]
     for index, item in enumerate(datasets[1:], start=1):
         assert_compatible(first, item, first_name=f"{name}[0]", second_name=f"{name}[{index}]")
-    return np.stack([item.s for item in datasets]), first.shape
+    return np.stack([item.s for item in datasets]), first.shape, first
 
 
 def estimate_repeat_differential_noise(
@@ -187,10 +210,24 @@ def estimate_repeat_differential_noise(
     variance is always computed; dense covariance is opt-in and size-guarded.
     """
 
-    reference, reference_shape = _repeat_stack(reference_repeats, name="reference_repeats")
-    dut, dut_shape = _repeat_stack(dut_repeats, name="dut_repeats")
+    reference, reference_shape, reference_coordinates = _repeat_stack(
+        reference_repeats, name="reference_repeats"
+    )
+    dut, dut_shape, dut_coordinates = _repeat_stack(dut_repeats, name="dut_repeats")
     if reference.shape != dut.shape or reference_shape != dut_shape:
         raise ValueError("reference and DUT repeat stacks must have identical shapes")
+    if (reference_coordinates is None) != (dut_coordinates is None):
+        raise TypeError(
+            "reference and DUT repeats must both be raw arrays or both be "
+            "coordinate-bearing ScatteringDataset sequences"
+        )
+    if reference_coordinates is not None and dut_coordinates is not None:
+        assert_compatible(
+            reference_coordinates,
+            dut_coordinates,
+            first_name="reference_repeats[0]",
+            second_name="dut_repeats[0]",
+        )
     repeat_count = reference.shape[0]
     if repeat_count < 2:
         raise ValueError("at least two paired repeats are required")
@@ -214,6 +251,12 @@ def estimate_repeat_differential_noise(
                 f"dense covariance for {observations} observations is disabled; "
                 "use diagonal whitening or raise the explicit safety limit"
             )
+        if repeat_count <= observations:
+            raise ValueError(
+                "dense covariance is rank-deficient when paired repeat_count is not "
+                "greater than observation_count; use diagonal whitening or collect "
+                "more independent paired repeats"
+            )
         # Each row is a repeat. This orientation produces E[x x^H], not its
         # elementwise conjugate, for a complex random column vector x.
         covariance = centered.T @ centered.conj() / (repeat_count - 1)
@@ -221,10 +264,10 @@ def estimate_repeat_differential_noise(
     positive = variance[variance > 0.0]
     return RepeatNoiseEstimate(
         mean_differential=mean,
-        variance=variance,
+        sample_variance=variance,
         repeat_count=repeat_count,
         observation_shape=reference_shape,
-        covariance=covariance,
+        sample_covariance=covariance,
         diagnostics={
             "pairing": "same_index",
             "observation_count": observations,
@@ -261,7 +304,7 @@ class TSVDSolution:
     residual_norm: float
     relative_residual: float
     solution_norm: float
-    selected_condition_number: float
+    selected_condition_number: float | None
     criterion_ranks: np.ndarray
     criterion_values: np.ndarray
     singular_value_threshold: float
@@ -302,7 +345,7 @@ def tsvd_solve(
     method: str = "gcv",
     rank: int | None = None,
     noise_norm: float | None = None,
-    energy_fraction: float = 0.999,
+    energy_fraction: float | None = None,
     rcond: float | None = None,
 ) -> TSVDSolution:
     """Solve a complex linear inverse problem with transparent TSVD selection.
@@ -332,6 +375,10 @@ def tsvd_solve(
         raise ValueError("rcond must be finite and non-negative")
     if method != "fixed" and rank is not None:
         raise ValueError("rank is only valid when method='fixed'")
+    if method != "discrepancy" and noise_norm is not None:
+        raise ValueError("noise_norm is only valid when method='discrepancy'")
+    if method != "energy" and energy_fraction is not None:
+        raise ValueError("energy_fraction is only valid when method='energy'")
 
     dtype = np.result_type(a.dtype, b.dtype, np.complex128)
     a = np.asarray(a, dtype=dtype)
@@ -350,8 +397,11 @@ def tsvd_solve(
         raise np.linalg.LinAlgError("no singular values exceed the requested threshold")
 
     beta = u.conj().T @ b
-    projected_energy = float(np.sum(np.abs(beta) ** 2))
-    outside_energy = max(0.0, float(np.vdot(b, b).real) - projected_energy)
+    # Form the component outside the computed left singular subspace directly.
+    # Subtracting projected energy from ||b||^2 catastrophically cancels for a
+    # full-row-rank matrix and can manufacture a large false residual floor.
+    outside_residual = b - u @ beta
+    outside_energy = float(np.vdot(outside_residual, outside_residual).real)
     ranks = np.arange(1, available + 1, dtype=np.int64)
     residual_squared = np.asarray(
         [outside_energy + float(np.sum(np.abs(beta[k:]) ** 2)) for k in ranks],
@@ -369,6 +419,8 @@ def tsvd_solve(
             raise ValueError(f"rank must lie between 1 and {available}")
         criterion_values = residual_curve
     elif method == "energy":
+        if energy_fraction is None:
+            energy_fraction = 0.999
         if not np.isfinite(energy_fraction) or not 0.0 < energy_fraction <= 1.0:
             raise ValueError("energy_fraction must lie in (0, 1]")
         energy_curve = np.cumsum(singular_values[:available] ** 2)
@@ -378,27 +430,42 @@ def tsvd_solve(
     elif method == "discrepancy":
         if noise_norm is None or not np.isfinite(noise_norm) or noise_norm < 0.0:
             raise ValueError("method='discrepancy' requires a finite non-negative noise_norm")
-        meeting = np.flatnonzero(residual_curve <= noise_norm)
+        # Rank zero is a meaningful discrepancy solution: if the unmodelled
+        # observation already lies inside the registered noise ball, fitting a
+        # singular vector would manufacture structure from a null experiment.
+        criterion_ranks = np.arange(0, available + 1, dtype=np.int64)
+        criterion_values = np.concatenate(
+            (np.asarray([float(np.linalg.norm(b))]), residual_curve)
+        )
+        meeting = np.flatnonzero(criterion_values <= noise_norm)
         target_met = meeting.size > 0
-        selected = int(ranks[meeting[0]]) if target_met else available
-        criterion_values = residual_curve
+        selected = int(criterion_ranks[meeting[0]]) if target_met else available
     else:
-        denominator = (a.shape[0] - ranks).astype(np.float64) ** 2
+        # GCV also needs the no-fit candidate. Otherwise a null experiment is
+        # forced to retain at least one singular direction.
+        criterion_ranks = np.arange(0, available + 1, dtype=np.int64)
+        gcv_residual_squared = np.concatenate(
+            (np.asarray([float(np.vdot(b, b).real)]), residual_squared)
+        )
+        denominator = (a.shape[0] - criterion_ranks).astype(np.float64) ** 2
         criterion_values = np.divide(
-            residual_squared,
+            gcv_residual_squared,
             denominator,
-            out=np.full_like(residual_squared, np.inf),
+            out=np.full_like(gcv_residual_squared, np.inf),
             where=denominator > 0.0,
         )
         finite = np.flatnonzero(np.isfinite(criterion_values))
         selected = (
-            int(ranks[finite[np.argmin(criterion_values[finite])]])
+            int(criterion_ranks[finite[np.argmin(criterion_values[finite])]])
             if finite.size
             else available
         )
 
-    coefficients = beta[:selected] / singular_values[:selected]
-    x = vh[:selected, :].conj().T @ coefficients
+    if selected == 0:
+        x = np.zeros(a.shape[1], dtype=dtype)
+    else:
+        coefficients = beta[:selected] / singular_values[:selected]
+        x = vh[:selected, :].conj().T @ coefficients
     predicted = a @ x
     residual = b - predicted
     residual_norm = float(np.linalg.norm(residual))
@@ -408,7 +475,9 @@ def tsvd_solve(
         if observation_norm > 0.0
         else (0.0 if residual_norm == 0.0 else float("inf"))
     )
-    condition = float(singular_values[0] / singular_values[selected - 1])
+    condition = (
+        None if selected == 0 else float(singular_values[0] / singular_values[selected - 1])
+    )
     return TSVDSolution(
         x=x,
         predicted=predicted,

@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import Any, Mapping
+from typing import Any
 
 import numpy as np
 
@@ -66,7 +67,7 @@ class VolumeTagContract:
 class BoundaryTagContract:
     """Disjoint boundary groups for PEC walls, ports, and diagnostics."""
 
-    ports: Mapping[str, int]
+    ports: Mapping[str, int] = field(default_factory=dict)
     pec_tags: tuple[int, ...] = ()
     observation_tags: tuple[int, ...] = ()
 

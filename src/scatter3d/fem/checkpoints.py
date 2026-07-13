@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import json
+import os
+import tempfile
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from hashlib import sha256
-import json
+from itertools import pairwise
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any
 
 
 def sha256_file(path: str | Path, chunk_size: int = 1024 * 1024) -> str:
@@ -43,7 +47,7 @@ class CheckpointIdentity:
         frequencies = tuple(float(v) for v in self.frequencies_hz)
         if not frequencies or any(v <= 0 for v in frequencies):
             raise ValueError("frequencies_hz must contain positive values")
-        if any(b <= a for a, b in zip(frequencies, frequencies[1:])):
+        if any(b <= a for a, b in pairwise(frequencies)):
             raise ValueError("frequencies_hz must be strictly increasing")
         if int(self.mpi_size) < 1:
             raise ValueError("mpi_size must be positive")
@@ -78,11 +82,27 @@ def write_manifest(path: str | Path, identity: CheckpointIdentity) -> None:
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
     payload = identity.canonical() | {"fingerprint": checkpoint_fingerprint(identity)}
-    temporary = target.with_suffix(target.suffix + ".tmp")
-    temporary.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    temporary.replace(target)
+    temporary: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=target.parent,
+            prefix=f".{target.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as stream:
+            temporary = Path(stream.name)
+            stream.write(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, target)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
 
 
 def verify_manifest(path: str | Path, identity: CheckpointIdentity) -> bool:
     payload = json.loads(Path(path).read_text(encoding="utf-8"))
-    return payload.get("fingerprint") == checkpoint_fingerprint(identity)
+    expected = identity.canonical() | {"fingerprint": checkpoint_fingerprint(identity)}
+    return payload == expected

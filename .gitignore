@@ -17,23 +17,80 @@ build/
 dist/
 *.egg-info/
 
+# Local configuration and credentials (example templates remain publishable)
+.env
+.env.*
+!.env.example
+!.env.sample
+!.env.template
+secrets/
+.secrets/
+credentials/
+credentials.json
+service-account*.json
+auth.json
+.aws/
+.azure/
+.gnupg/
+.netrc
+.npmrc
+.pypirc
+kubeconfig*
+*.pem
+*.key
+*.ppk
+*.p12
+*.pfx
+*.jks
+*.keystore
+*.kdbx
+*.token
+*.secret
+*.secrets
+*.credentials
+*.tfstate
+*.tfstate.*
+id_rsa*
+id_ed25519*
+id_ecdsa*
+id_dsa*
+
 # FEM and MPI outputs
 *.bp/
 *.bp4/
 *.bp5/
 *.xdmf
 *.h5
+*.hdf5
 *.msh
 *.petsc
+*.pvd
+*.pvtu
+*.vtu
+*.vtk
+*.zarr/
 checkpoints/
 results/
+artifacts/
 
 # Measurement data are intentionally never committed by default
 data/raw/
 data/private/
+data/measurements/
 *.s[0-9]*p
+*.npy
 *.npz
+*.mat
+*.csv
+*.tsv
+!examples/**/*.npy
 !examples/**/*.npz
+!examples/**/*.csv
+!examples/**/*.tsv
+!tests/fixtures/**/*.npy
+!tests/fixtures/**/*.npz
+!tests/fixtures/**/*.csv
+!tests/fixtures/**/*.tsv
 
 # Editors and operating systems
 .idea/

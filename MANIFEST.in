@@ -1,0 +1,10 @@
+include README.md LICENSE CITATION.cff CHANGELOG.md CONTRIBUTING.md SECURITY.md
+include pyproject.toml .dockerignore .gitignore .gitattributes
+include .github/workflows/quality.yml
+
+recursive-include docs *.md *.json SHA256SUMS
+recursive-include docker Dockerfile *.yaml *.txt *.md
+recursive-include examples *.py *.sh
+recursive-include tests *.py
+recursive-include validation *.py
+include validation/scaling_sweep_v1.json

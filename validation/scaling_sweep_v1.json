@@ -1,0 +1,57 @@
+{
+  "schema": "scatter3d.validation.scaling_sweep/v1",
+  "canonical_path": "validation/scaling_sweep_v1.json",
+  "status_vocabulary": [
+    "PASSED",
+    "FAILED",
+    "NOT RUN",
+    "BLOCKED"
+  ],
+  "physical_problem": {
+    "fine_degree": 3,
+    "coarse_degree": 1,
+    "frequency_hz": 100000000.0,
+    "ports": [
+      "left",
+      "right"
+    ]
+  },
+  "solver": {
+    "hierarchy": "p-multigrid",
+    "outer_ksp": "fgmres",
+    "preconditioning_side": "right",
+    "maximum_true_relative_residual": 1e-07,
+    "maximum_iterations": 1000,
+    "asm_overlap": 1,
+    "fine_local_ksp": "preonly",
+    "fine_local_pc": "lu",
+    "fine_local_factor_solver": "mumps",
+    "coarse_ksp": "preonly",
+    "coarse_pc": "lu",
+    "coarse_factor_solver": "mumps"
+  },
+  "preconditioner_absorption_shifts": [
+    0.0,
+    0.25,
+    0.5,
+    1.0
+  ],
+  "cgroup_memory_limit_bytes": 30064771072,
+  "wall_time_limit_seconds": 10800,
+  "rungs": [
+    {
+      "id": "p3-n9-mpi4",
+      "subdivisions": 9,
+      "mpi_ranks": 4,
+      "gmres_restart": 80,
+      "expected_global_complex_dofs": 86103
+    },
+    {
+      "id": "p3-n16-mpi8",
+      "subdivisions": 16,
+      "mpi_ranks": 8,
+      "gmres_restart": 100,
+      "expected_global_complex_dofs": 470928
+    }
+  ]
+}

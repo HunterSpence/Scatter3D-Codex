@@ -9,11 +9,12 @@ fails when H(curl) error is not monotone or the observed order misses its gate.
 from __future__ import annotations
 
 import argparse
-from dataclasses import asdict, dataclass
 import json
+from collections.abc import Sequence
+from dataclasses import asdict, dataclass
+from itertools import pairwise
 from math import log
 from pathlib import Path
-from typing import Sequence
 
 import numpy as np
 
@@ -35,6 +36,7 @@ def _tag_cube(domain):
 
     tdim = domain.topology.dim
     fdim = tdim - 1
+    domain.topology.create_connectivity(fdim, tdim)
     cell_count = domain.topology.index_map(tdim).size_local
     cell_indices = np.arange(cell_count, dtype=np.int32)
     cell_tags = mesh.meshtags(
@@ -115,9 +117,11 @@ def solve_level(degree: int, subdivisions: int, frequency_hz: float) -> LevelRes
     pc.setType("lu")
     try:
         pc.setFactorSolverType("mumps")
-    except PETSc.Error:
+    except PETSc.Error as exc:
         if domain.comm.size > 1:
-            raise RuntimeError("parallel manufactured validation requires MUMPS")
+            raise RuntimeError(
+                "parallel manufactured validation requires MUMPS"
+            ) from exc
     ksp.setErrorIfNotConverged(True)
     ksp.solve(rhs, solution.x.petsc_vec)
     solution.x.scatter_forward()
@@ -154,7 +158,7 @@ def solve_level(degree: int, subdivisions: int, frequency_hz: float) -> LevelRes
 def observed_orders(levels: Sequence[LevelResult]) -> list[float]:
     return [
         log(coarse.hcurl_error / fine.hcurl_error) / log(coarse.h / fine.h)
-        for coarse, fine in zip(levels, levels[1:])
+        for coarse, fine in pairwise(levels)
     ]
 
 
@@ -171,7 +175,7 @@ def main() -> int:
         parser.error("degrees must be selected from 1, 2, and 3")
     if len(args.subdivisions) < 3 or any(value < 1 for value in args.subdivisions):
         parser.error("provide at least three positive subdivisions")
-    if any(b <= a for a, b in zip(args.subdivisions, args.subdivisions[1:])):
+    if any(b <= a for a, b in zip(args.subdivisions, args.subdivisions[1:], strict=False)):
         parser.error("subdivisions must be strictly increasing")
 
     import dolfinx
@@ -188,7 +192,7 @@ def main() -> int:
         orders = observed_orders(levels)
         monotone = all(
             fine.hcurl_error < coarse.hcurl_error
-            for coarse, fine in zip(levels, levels[1:])
+            for coarse, fine in pairwise(levels)
         )
         residual_ok = all(
             level.converged_reason > 0

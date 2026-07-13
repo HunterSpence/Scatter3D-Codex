@@ -2,14 +2,33 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from math import isfinite, pi
 from types import MappingProxyType
-from typing import Any, Mapping
+from typing import Any
 
 EPSILON_0 = 8.854_187_812_8e-12
 MU_0 = 1.256_637_062_12e-6
 SPEED_OF_LIGHT = 1.0 / (EPSILON_0 * MU_0) ** 0.5
+
+_RESERVED_TOP_LEVEL_PETSC_OPTIONS = frozenset(
+    {
+        "ksp_atol",
+        "ksp_error_if_not_converged",
+        "ksp_max_it",
+        "ksp_pc_side",
+        "ksp_rtol",
+        "ksp_type",
+        "pc_factor_mat_solver_type",
+        "pc_mg_galerkin",
+        "pc_mg_levels",
+        "pc_mg_type",
+        "pc_side",
+        "pc_type",
+        "pc_use_amat",
+    }
+)
 
 
 def _finite_complex(value: complex, name: str) -> complex:
@@ -146,7 +165,7 @@ class PMLConfig:
             raise ValueError("PML bounds and thickness must contain three values")
         if not all(isfinite(v) for v in (*lo, *hi, *thickness)):
             raise ValueError("PML bounds and thickness must be finite")
-        if any(a >= b for a, b in zip(lo, hi)):
+        if any(a >= b for a, b in zip(lo, hi, strict=False)):
             raise ValueError("each physical_min_m coordinate must be below physical_max_m")
         if any(v < 0 for v in thickness) or not any(v > 0 for v in thickness):
             raise ValueError("PML thickness must be nonnegative and nonzero on at least one axis")
@@ -218,9 +237,12 @@ class LinearSolverConfig:
     pc_type: str = "lu"
     factor_solver_type: str | None = "mumps"
     solver_path: str = "direct"
+    preconditioning_side: str = "left"
     relative_tolerance: float = 1.0e-10
     absolute_tolerance: float = 1.0e-12
     maximum_iterations: int = 2_000
+    preconditioner_absorption_shift: float = 0.0
+    p_multigrid_coarse_degree: int | None = None
     error_if_not_converged: bool = True
     petsc_options: Mapping[str, str | int | float | None] = field(default_factory=dict)
 
@@ -235,18 +257,65 @@ class LinearSolverConfig:
             raise ValueError("direct solver_path requires an LU or Cholesky preconditioner")
         if path == "iterative" and self.pc_type.lower() in factor_types:
             raise ValueError("iterative solver_path forbids LU and Cholesky factorization")
+        side = self.preconditioning_side.lower()
+        if side not in ("left", "right", "symmetric"):
+            raise ValueError(
+                "preconditioning_side must be 'left', 'right', or 'symmetric'"
+            )
         rtol = float(self.relative_tolerance)
         atol = float(self.absolute_tolerance)
         maximum = int(self.maximum_iterations)
+        absorption_shift = float(self.preconditioner_absorption_shift)
+        coarse_degree = (
+            None
+            if self.p_multigrid_coarse_degree is None
+            else int(self.p_multigrid_coarse_degree)
+        )
         if not (isfinite(rtol) and isfinite(atol) and rtol > 0 and atol >= 0):
             raise ValueError("solver tolerances must be finite with rtol > 0 and atol >= 0")
         if maximum < 1:
             raise ValueError("maximum_iterations must be positive")
+        if not isfinite(absorption_shift) or absorption_shift < 0:
+            raise ValueError(
+                "preconditioner_absorption_shift must be finite and nonnegative"
+            )
+        if path == "direct" and absorption_shift != 0.0:
+            raise ValueError(
+                "preconditioner_absorption_shift is available only for iterative solvers"
+            )
+        if coarse_degree is not None:
+            if coarse_degree not in (1, 2):
+                raise ValueError("p_multigrid_coarse_degree must be 1 or 2")
+            if path != "iterative" or self.pc_type.lower() != "mg":
+                raise ValueError(
+                    "p_multigrid_coarse_degree requires iterative solver_path and pc_type='mg'"
+                )
+        elif self.pc_type.lower() == "mg":
+            raise ValueError("pc_type='mg' requires p_multigrid_coarse_degree")
         object.__setattr__(self, "relative_tolerance", rtol)
         object.__setattr__(self, "absolute_tolerance", atol)
         object.__setattr__(self, "maximum_iterations", maximum)
+        object.__setattr__(
+            self, "preconditioner_absorption_shift", absorption_shift
+        )
+        object.__setattr__(self, "p_multigrid_coarse_degree", coarse_degree)
+        normalized_options: dict[str, str | int | float | None] = {}
+        for raw_key, value in self.petsc_options.items():
+            key = str(raw_key).strip().lstrip("-").strip().lower()
+            if not key:
+                raise ValueError("PETSc option keys must not be empty")
+            if key in _RESERVED_TOP_LEVEL_PETSC_OPTIONS:
+                raise ValueError(
+                    f"petsc_options may not override typed top-level option {key!r}"
+                )
+            if key in normalized_options:
+                raise ValueError(f"duplicate normalized PETSc option key {key!r}")
+            normalized_options[key] = value
         object.__setattr__(self, "solver_path", path)
-        object.__setattr__(self, "petsc_options", MappingProxyType(dict(self.petsc_options)))
+        object.__setattr__(self, "preconditioning_side", side)
+        object.__setattr__(
+            self, "petsc_options", MappingProxyType(normalized_options)
+        )
 
     @property
     def is_direct(self) -> bool:
@@ -256,8 +325,12 @@ class LinearSolverConfig:
     def is_iterative(self) -> bool:
         return self.solver_path == "iterative"
 
+    @property
+    def uses_p_multigrid(self) -> bool:
+        return self.p_multigrid_coarse_degree is not None
+
     @classmethod
-    def direct(cls, *, factor_solver_type: str = "mumps") -> "LinearSolverConfig":
+    def direct(cls, *, factor_solver_type: str = "mumps") -> LinearSolverConfig:
         """Small-problem reference path: one sparse factorization per frequency."""
 
         return cls(
@@ -268,7 +341,7 @@ class LinearSolverConfig:
         )
 
     @classmethod
-    def iterative_maxwell(cls, **overrides: Any) -> "LinearSolverConfig":
+    def iterative_maxwell(cls, **overrides: Any) -> LinearSolverConfig:
         """Distributed, non-factorizing baseline for large edge-element systems.
 
         FGMRES with overlapping additive Schwarz and local ILU(0) is a
@@ -283,6 +356,7 @@ class LinearSolverConfig:
             "ksp_type": "fgmres",
             "pc_type": "asm",
             "factor_solver_type": None,
+            "preconditioning_side": "right",
             "relative_tolerance": 1.0e-8,
             "maximum_iterations": 1_000,
             "petsc_options": {
@@ -296,15 +370,58 @@ class LinearSolverConfig:
         values.update(overrides)
         return cls(**values)
 
+    @classmethod
+    def iterative_p_multigrid(
+        cls,
+        *,
+        coarse_degree: int = 1,
+        **overrides: Any,
+    ) -> LinearSolverConfig:
+        """Two-level assembled p-multigrid with an exact low-order coarse solve."""
+
+        values: dict[str, Any] = {
+            "solver_path": "iterative",
+            "ksp_type": "fgmres",
+            "pc_type": "mg",
+            "factor_solver_type": None,
+            "preconditioning_side": "right",
+            "relative_tolerance": 1.0e-8,
+            "maximum_iterations": 1_000,
+            "p_multigrid_coarse_degree": coarse_degree,
+            "petsc_options": {
+                "ksp_gmres_restart": 80,
+                "mg_levels_1_ksp_type": "richardson",
+                "mg_levels_1_ksp_max_it": 1,
+                "mg_levels_1_pc_type": "asm",
+                "mg_levels_1_pc_asm_overlap": 1,
+                "mg_levels_1_sub_ksp_type": "preonly",
+                "mg_levels_1_sub_pc_type": "lu",
+                "mg_levels_1_sub_pc_factor_mat_solver_type": "mumps",
+                "mg_coarse_ksp_type": "preonly",
+                "mg_coarse_pc_type": "lu",
+                "mg_coarse_pc_factor_mat_solver_type": "mumps",
+            },
+        }
+        option_overrides = overrides.pop("petsc_options", None)
+        values.update(overrides)
+        if option_overrides is not None:
+            merged_options = dict(values["petsc_options"])
+            merged_options.update(option_overrides)
+            values["petsc_options"] = merged_options
+        return cls(**values)
+
     def canonical(self) -> dict[str, Any]:
         return {
             "ksp_type": self.ksp_type,
             "pc_type": self.pc_type,
             "factor_solver_type": self.factor_solver_type,
             "solver_path": self.solver_path,
+            "preconditioning_side": self.preconditioning_side,
             "relative_tolerance": self.relative_tolerance,
             "absolute_tolerance": self.absolute_tolerance,
             "maximum_iterations": self.maximum_iterations,
+            "preconditioner_absorption_shift": self.preconditioner_absorption_shift,
+            "p_multigrid_coarse_degree": self.p_multigrid_coarse_degree,
             "error_if_not_converged": self.error_if_not_converged,
             "petsc_options": dict(sorted(self.petsc_options.items())),
         }

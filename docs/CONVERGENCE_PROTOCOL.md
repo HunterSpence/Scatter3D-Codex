@@ -34,7 +34,8 @@ quadrature degree:
 frequency and port selection:
 material values, loss convention, and source:
 PML thickness/profile/target reflection:
-KSP/PC options and tolerances:
+requested and effective KSP/PC hierarchy, options prefix, and tolerances:
+physical operator and preconditioning-operator identities:
 ```
 
 The pinned image selects complex PETSc and caps threaded math libraries at one.
@@ -236,10 +237,59 @@ global factorization. Compare both on the largest problem the direct profile can
 solve and require agreement of fields/S-parameters within the registered
 algebraic tolerance.
 
+The one-level profile is a portability and correctness baseline, not a scalable
+endpoint. Executed p=3 evidence at `c3c1ded` is mixed and must be reported as
+such:
+
+- 86,103 global complex DoFs with ASM overlap 1 and corrected local MUMPS LU:
+  **PASSED** for both right-hand sides;
+- peak memory at most 50% of direct on the identical 86,103-DoF problem:
+  **FAILED**, with summed rank peak-RSS ratio `0.8263214111`;
+- 470,928 global complex DoFs with the same one-level method: **FAILED**, with
+  both right-hand sides reaching the 1,000-iteration cap;
+- at least 3,000,000 global complex DoFs: **NOT RUN**.
+
+See [Distributed solver scaling evidence](SCALING_EVIDENCE.md) for the exact
+revision, runtime digests, residuals, and artifact hashes.
+
+The current development source keeps the physical Maxwell matrix as `A`,
+assembles a separate absorption-shifted/lossy Maxwell matrix as `P`, and uses
+right-preconditioned FGMRES through `KSPSetOperators(A, P)`. The shift does not
+change `A` or any right-hand side, and zero shift explicitly aliases `P` to `A`.
+Validation schema `scatter3d.validation.fem_smoke/v2` records matrix metrics,
+the shift, requested and effective PETSc hierarchy, raw ASCII KSP view,
+provenance, physical-problem identity, and cgroup metadata. It is no-clobber by
+default. Exact-revision serial and two-rank p=3-to-p=1 correctness artifacts
+**PASSED** at `bee9e9d` on 1,158 fine and 98 coarse DoFs. They do not change the
+executed `c3c1ded` scaling statuses above.
+
+An absorption shift alone is not a global correction. The 470k failure requires
+a genuine coarse level. The next candidate is p-multigrid from the p=3 Nedelec
+space to an assembled p=1 Nedelec coarse operator on the same mesh and physical
+model. That two-level candidate has executed small correctness evidence, but
+its registered 86k/471k shift sweep remains **NOT RUN**. HPDDM is **BLOCKED** in
+the pinned image because PETSc lacks its HPDDM backend; it is not an equivalent
+fallback. Do not infer scalability from configuration or the small canaries.
+
+The capability probe is part of `/opt/scatter3d/runtime-metadata.json` in every
+new project image. For the pinned base digest, this exact probe reports both
+values as `false`:
+
+```bash
+python3 -c 'from petsc4py import PETSc; print({name: bool(PETSc.Sys.hasExternalPackage(name)) for name in ("hpddm", "slepc")})'
+# {'hpddm': False, 'slepc': False}
+```
+
+The image build records `petsc_has_hpddm` and `petsc_has_slepc`, and the scaling
+registration hashes that runtime metadata. This makes **BLOCKED** an auditable
+capability result rather than an assumption.
+
 Record setup versus solve time separately. Report global complex degrees of
 freedom, matrix nonzeros/estimated memory, and per-rank RSS high-water max and
-sum. Do not claim a memory reduction or million-DoF capacity from configuration
-alone; publish the executed benchmark artifact.
+sum, plus cgroup `memory.peak` where available. Do not claim a memory reduction
+or million-DoF capacity from configuration alone; publish the executed benchmark
+artifact. Retain every registered shift/coarse-space attempt, including
+failures, rather than publishing only the best parameter choice.
 
 ## Parallel scaling protocol
 
@@ -275,4 +325,4 @@ controls pass. At minimum, archive:
 | Scaling | ranks/time/memory table |
 | Experiment | repeat/null/known-target reports |
 
-If a gate was not run, write **NOT RUN**. “Expected to work” is not evidence.
+If a gate has no executed evidence, write **NOT RUN**. “Expected to work” is not evidence.

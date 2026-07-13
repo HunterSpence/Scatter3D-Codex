@@ -36,8 +36,108 @@ def test_iterative_preset_cannot_fall_back_to_global_lu() -> None:
     assert config.is_iterative
     assert config.pc_type == "asm"
     assert config.factor_solver_type is None
+    assert config.preconditioning_side == "right"
     with pytest.raises(ValueError, match="forbids LU"):
         LinearSolverConfig(solver_path="iterative", ksp_type="gmres", pc_type="lu")
+    with pytest.raises(ValueError, match="preconditioning_side"):
+        LinearSolverConfig(preconditioning_side="diagonal")
+
+
+def test_absorption_shift_is_finite_nonnegative_and_iterative_only() -> None:
+    shifted = LinearSolverConfig.iterative_maxwell(
+        preconditioner_absorption_shift=0.5
+    )
+    assert shifted.preconditioner_absorption_shift == 0.5
+    assert shifted.canonical()["preconditioner_absorption_shift"] == 0.5
+    for invalid in (-1.0, float("inf"), float("nan")):
+        with pytest.raises(ValueError, match="finite and nonnegative"):
+            LinearSolverConfig.iterative_maxwell(
+                preconditioner_absorption_shift=invalid
+            )
+    with pytest.raises(ValueError, match="only for iterative"):
+        LinearSolverConfig(
+            solver_path="direct",
+            preconditioner_absorption_shift=0.25,
+        )
+
+
+@pytest.mark.parametrize(
+    "reserved",
+    (
+        "pc_type",
+        "-PC_TYPE",
+        "-- pc_type",
+        "ksp_type",
+        "ksp_pc_side",
+        "ksp_rtol",
+        "ksp_atol",
+        "ksp_max_it",
+        "pc_factor_mat_solver_type",
+    ),
+)
+def test_petsc_options_cannot_override_typed_top_level_fields(
+    reserved: str,
+) -> None:
+    with pytest.raises(ValueError, match="typed top-level"):
+        LinearSolverConfig.iterative_maxwell(petsc_options={reserved: "lu"})
+
+
+def test_petsc_option_keys_are_normalized_without_blocking_nested_tuning() -> None:
+    config = LinearSolverConfig.iterative_maxwell(
+        petsc_options={
+            "-SUB_PC_TYPE": "lu",
+            "sub_pc_factor_mat_solver_type": "mumps",
+            "KSP_GMRES_RESTART": 60,
+            "pc_asm_overlap": 2,
+        }
+    )
+    assert dict(config.petsc_options) == {
+        "sub_pc_type": "lu",
+        "sub_pc_factor_mat_solver_type": "mumps",
+        "ksp_gmres_restart": 60,
+        "pc_asm_overlap": 2,
+    }
+    with pytest.raises(ValueError, match="duplicate normalized"):
+        LinearSolverConfig.iterative_maxwell(
+            petsc_options={"sub_pc_type": "ilu", "-SUB_PC_TYPE": "lu"}
+        )
+
+
+def test_p_multigrid_preset_is_typed_and_reserves_structure() -> None:
+    config = LinearSolverConfig.iterative_p_multigrid(
+        coarse_degree=1,
+        preconditioner_absorption_shift=0.5,
+    )
+    assert config.is_iterative
+    assert config.uses_p_multigrid
+    assert config.pc_type == "mg"
+    assert config.p_multigrid_coarse_degree == 1
+    assert config.preconditioning_side == "right"
+    assert config.petsc_options["mg_levels_1_ksp_type"] == "richardson"
+    assert config.petsc_options["mg_levels_1_ksp_max_it"] == 1
+    assert config.petsc_options["mg_levels_1_pc_type"] == "asm"
+    assert config.petsc_options["mg_coarse_pc_type"] == "lu"
+    merged = LinearSolverConfig.iterative_p_multigrid(
+        petsc_options={"ksp_gmres_restart": 40}
+    )
+    assert merged.petsc_options["ksp_gmres_restart"] == 40
+    assert merged.petsc_options["mg_levels_1_pc_type"] == "asm"
+    assert merged.petsc_options["mg_coarse_pc_type"] == "lu"
+    assert config.canonical()["p_multigrid_coarse_degree"] == 1
+    for reserved in ("pc_mg_levels", "pc_mg_galerkin", "pc_mg_type"):
+        with pytest.raises(ValueError, match="typed top-level"):
+            LinearSolverConfig.iterative_p_multigrid(
+                petsc_options={reserved: "invalid"}
+            )
+
+
+def test_p_multigrid_requires_iterative_mg_and_valid_coarse_degree() -> None:
+    with pytest.raises(ValueError, match="requires p_multigrid_coarse_degree"):
+        LinearSolverConfig(solver_path="iterative", pc_type="mg")
+    with pytest.raises(ValueError, match="requires iterative"):
+        LinearSolverConfig(p_multigrid_coarse_degree=1)
+    with pytest.raises(ValueError, match="must be 1 or 2"):
+        LinearSolverConfig.iterative_p_multigrid(coarse_degree=3)
 
 
 def test_reference_and_dut_are_distinct_model_states() -> None:

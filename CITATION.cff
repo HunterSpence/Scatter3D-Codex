@@ -8,8 +8,6 @@ authors:
 repository-code: "https://github.com/HunterSpence/Scatter3D-Codex"
 url: "https://github.com/HunterSpence/Scatter3D-Codex"
 license: Apache-2.0
-version: 0.1.0
-date-released: 2026-07-12
 keywords:
   - microwave imaging
   - inverse scattering

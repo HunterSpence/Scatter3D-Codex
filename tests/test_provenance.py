@@ -55,6 +55,7 @@ def test_write_manifest_is_byte_stable_and_detects_tampering(tmp_path: Path) -> 
     assert digest == manifest["manifest_sha256"]
     write_manifest(path, dict(reversed(list(manifest.items()))))
     assert path.read_bytes() == first_bytes
+    assert not list(tmp_path.glob("*.tmp"))
     assert json.loads(path.read_text(encoding="utf-8"))["manifest_sha256"] == digest
 
     tampered = dict(manifest)
