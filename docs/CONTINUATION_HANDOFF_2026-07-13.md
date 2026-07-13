@@ -108,6 +108,8 @@ CI run. Run 29214242189 remains the immutable evidence for `d5fe814`.
 - a Docker supervisor handshake that keeps PID 1 and the cgroup alive until the
   host captures positive `memory.peak`, `memory.max`, `memory.swap.max`, and
   `memory.events` before container cleanup;
+- attempt-specific Docker ownership labels plus a stable absence window after
+  ambiguous create timeouts, without deleting a pre-existing name conflict;
 - honest preservation of `FAILED` solver results instead of converting them to
   skips.
 
@@ -377,6 +379,7 @@ assert result["timed_out"] is False
 assert result["container_resource_contract_passed"] is True
 assert result["container_cleanup_attempted"] is True
 assert result["container_cleanup_succeeded"] is True
+assert result["container_absence_verified"] is True
 assert result["host_cgroup"]["peak_bytes"] > 0
 assert result["host_cgroup"]["limit_bytes"] == memory
 assert result["host_cgroup"]["swap_limit_bytes"] == 0
@@ -454,7 +457,8 @@ python3 validation/register_scaling_sweep.py \
   --base-runtime-metadata ../evidence/runtime-metadata.json \
   --output ../evidence/registration.json
 
-sha256sum ../evidence/registration.json > ../evidence/registration.SHA256
+(cd ../evidence && sha256sum registration.json > registration.SHA256)
+(cd ../evidence && sha256sum -c registration.SHA256)
 test -z "$(git status --porcelain --untracked-files=normal)"
 ```
 

@@ -56,6 +56,11 @@ current repository state, not completed hardware or scaling acceptance.
 - Corrected a PETSc option-lifecycle bug in which a requested ASM subdomain LU
   remained the default ILU because nested options were removed before setup.
   A heavy regression now proves nested setup consumes the requested options.
+- Hardened registered scaling execution so completed FEM PASSED/FAILED artifacts
+  with a published `fem-smoke.json` are checked against numerical, hierarchy,
+  operator, counter, cgroup, and exit-code evidence. Preflight and missing-artifact
+  failures remain explicit. Docker cleanup is attempt-bound, refuses foreign name
+  conflicts, and observes the full post-timeout window before claiming absence.
 
 ### Security
 
