@@ -134,6 +134,14 @@ two-level software hierarchy at 1,158 fine DoFs. The registered shift sweep at
 86,103 and 470,928 DoFs is **NOT RUN**. All historical `c3c1ded`
 **PASSED**/**FAILED** scaling and memory results above are unchanged.
 
+Campaign-03 reached a disposable runner with attestation and bootstrap
+**PASSED**, but remote preparation **FAILED** before source checkout because a
+disk-capacity check used mutually incompatible GNU `df` options. The image
+build, lifecycle canary, wrong-DoF canary, immutable registration, and all eight
+solver runs are **NOT RUN**. Attempt-owned provider resources and the ephemeral
+key were deleted and independently verified absent. See the
+[sanitized failure record](evidence/campaign-03-preparation-failure.json).
+
 ## Current truth boundary
 
 - The old FEM surface-current RHS is an explicitly uncalibrated load, not a

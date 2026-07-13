@@ -1,5 +1,12 @@
 # Continuation handoff — 2026-07-13
 
+> **Post-checkpoint update:** campaign-03 reached an attested, bootstrapped
+> disposable runner, then remote preparation **FAILED** before source checkout
+> because GNU `df` rejects combining `-P` with `--output=avail`. Both canaries,
+> registration, and all eight solver runs are **NOT RUN**. All attempt-owned
+> provider resources and the ephemeral key were deleted and independently
+> verified absent. See the [sanitized failure record](evidence/campaign-03-preparation-failure.json).
+
 ## Purpose
 
 This document is the restart point for completing the strongest honest public

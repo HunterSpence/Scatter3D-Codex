@@ -21,6 +21,7 @@ from that repository was copied.
 | Matched TEM boundary and electric-mode power normalization | Digest-pinned complex DOLFINx tests | Software/runtime checks **PASSED**; calibrated incident/outgoing S-parameter extraction and an independent port benchmark are **NOT RUN** |
 | Two-rank operation | Dedicated MPI test and iterative repeated-RHS smoke solve with zero permitted skips | **PASSED** at `c3c1ded` for the small 98-DoF correctness case; this is not scaling evidence |
 | Two-level p=3-to-p=1 p-multigrid correctness | Shifted-Pmat serial and two-rank MPI solves with live hierarchy/operator checks | **PASSED** at `bee9e9d`: 1,158 fine DoFs, 98 coarse DoFs, two RHS; this is not scaling evidence |
+| Registered p-multigrid scaling sweep | Both canaries, immutable registration, and all eight registered runs | **NOT RUN**; campaign-03 preparation **FAILED** before either canary, registration, or a solver launch |
 | p=3 iterative solve at 86,103 global complex DoFs | Two RHS, positive PETSc reasons, and true relative residual at most `1e-7` | **PASSED** at `c3c1ded` with right FGMRES, ASM overlap 1, and local MUMPS LU |
 | p=3 iterative solve at 470,928 global complex DoFs | Same two-RHS residual gate | **FAILED** at `c3c1ded`; both RHS reached 1,000 iterations and residuals were `2.50e-7` and `5.51e-6` |
 | Real POM/PLA object imaging | Archived VNA repeats, nulls, known target, materials, and acceptance report | **BLOCKED** because no accepted raw measurement bundle has been supplied |
@@ -44,6 +45,14 @@ and provides an assembled p=3-to-p=1 two-level correction. Exact-revision
 serial and two-rank correctness artifacts **PASSED** at 1,158 fine DoFs. The
 registered 86,103- and 470,928-DoF p-multigrid shift sweep remains **NOT RUN**,
 so no mesh-scalability claim follows from the small correctness cases.
+
+Campaign-03 disposable-runner preparation at `5393e44` **FAILED** before
+source checkout because its disk-capacity preflight combined incompatible GNU
+`df` options. Runner attestation and bootstrap **PASSED**; the image build,
+both canaries, immutable registration, and every solver run were **NOT RUN**.
+All attempt-owned provider resources and the ephemeral key were deleted and
+independently verified absent. The sanitized record is
+[`campaign-03-preparation-failure.json`](docs/evidence/campaign-03-preparation-failure.json).
 
 ## Why this design
 
@@ -129,8 +138,11 @@ python3 validation/register_scaling_sweep.py \
   --output /opt/scatter3d-evidence/registration.json
 ```
 
-Execute one immutable entry at a time so remaining unstarted entries can proceed
-after an interruption without reusing any existing run directory:
+Execute one immutable entry at a time without reusing any existing run
+directory. Any non-passing result stops automatic execution. A remaining
+unstarted entry may proceed only after the completed evidence is mirrored and
+an explicit review determines that the failure was numerical and the runner,
+instrumentation, and continuation contract remain safe:
 
 ```bash
 python3 validation/run_registered_scaling_sweep.py \

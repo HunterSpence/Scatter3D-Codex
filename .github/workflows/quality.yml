@@ -66,6 +66,138 @@ jobs:
           bash -n examples/run_container_verification.sh
       - name: Validate citation metadata
         run: cffconvert --validate
+      - name: Verify public evidence manifests and status contract
+        run: |
+          set -euo pipefail
+          (cd docs/evidence && sha256sum --check SHA256SUMS)
+          python - <<'PY'
+          from __future__ import annotations
+
+          import json
+          import re
+          from pathlib import Path
+
+          evidence = Path("docs/evidence")
+          manifest_digests: dict[str, str] = {}
+          for line in (evidence / "SHA256SUMS").read_text(encoding="utf-8").splitlines():
+              digest, separator, name = line.partition("  ")
+              if (
+                  len(digest) != 64
+                  or any(character not in "0123456789abcdef" for character in digest)
+                  or separator != "  "
+                  or not name
+                  or Path(name).name != name
+              ):
+                  raise SystemExit("docs/evidence/SHA256SUMS has an invalid entry")
+              if name in manifest_digests:
+                  raise SystemExit("docs/evidence/SHA256SUMS has a duplicate entry")
+              manifest_digests[name] = digest
+
+          json_names = {path.name for path in evidence.glob("*.json") if path.is_file()}
+          if set(manifest_digests) != json_names:
+              raise SystemExit(
+                  "docs/evidence/SHA256SUMS must cover every and only public JSON artifact"
+              )
+
+          report = json.loads(
+              (evidence / "campaign-03-preparation-failure.json").read_text(encoding="utf-8")
+          )
+          expected_top_keys = {
+              "attempt",
+              "cleanup",
+              "control",
+              "failure",
+              "gates",
+              "private_archive_hashes",
+              "runner_contract",
+              "schema",
+              "solver_attempts",
+              "source",
+              "status",
+          }
+          if set(report) != expected_top_keys:
+              raise SystemExit("campaign-03 evidence has unexpected top-level fields")
+
+          required_scalars = {
+              "attempt": "campaign-03",
+              "schema": "scatter3d.evidence.remote_preparation_failure/v1",
+              "status": "FAILED",
+          }
+          for key, expected in required_scalars.items():
+              if report.get(key) != expected:
+                  raise SystemExit(f"campaign-03 evidence has invalid {key}")
+          solver_attempts = report.get("solver_attempts")
+          if type(solver_attempts) is not int or solver_attempts != 0:
+              raise SystemExit("campaign-03 solver_attempts must be integer zero")
+
+          expected_maps = {
+              "cleanup": {
+                  "ephemeral_ssh_key": "PASSED",
+                  "firewall": "PASSED",
+                  "independent_absence_check": "PASSED",
+                  "primary_ip": "PASSED",
+                  "server": "PASSED",
+              },
+              "control": {
+                  "build_id": "scatter3d-provider-control-v2.3-20260713-04",
+                  "controller_sha256": "2ef0cb8cf036268b6e2e05cb006511f05de609389253f60ebcc08af197d6c8c4",
+                  "preparation_script_sha256": "c98f62f8db0c6ee410b8b0e003af96be333c3d72c20514ab5c7345f3c975f521",
+                  "transport_sha256": "41d5761dd4e4258ed6a53452f2094363bc83177361bdf3516e12f1bad10154fc",
+              },
+              "failure": {
+                  "message": "df: options -P and --output are mutually exclusive",
+                  "phase": "remote_preparation",
+                  "status": "FAILED",
+              },
+              "gates": {
+                  "bootstrap": "PASSED",
+                  "image_build": "NOT RUN",
+                  "immutable_registration": "NOT RUN",
+                  "lifecycle_canary": "NOT RUN",
+                  "p3_pmg_scaling_sweep": "NOT RUN",
+                  "runner_attestation": "PASSED",
+                  "source_checkout": "NOT RUN",
+                  "wrong_dof_canary": "NOT RUN",
+              },
+              "private_archive_hashes": {
+                  "campaign_manifest_sha256": "77d6a44e09e0876500849c507122d3b7f926b285c235affc52f79013b6383e42",
+                  "ephemeral_ssh_state_sha256": "1ec325d64a1b277d659cbf23a448248367929f6a254ea6b94170effe18125645",
+                  "partial_preparation_tar_sha256": "8f4d3ded40f315df00a6b06f56fab8e427f820ad50c13f4a389aa60288bb44c1",
+                  "provider_deleted_state_sha256": "0f587a296cf35c16074c6d802e8884967d531dd25ae178a0f65e17e3c086d906",
+              },
+              "runner_contract": {"location": "fsn1", "server_type": "cpx62"},
+              "source": {
+                  "ci_run": 29222225396,
+                  "ci_status": "PASSED",
+                  "commit": "5393e4494a5f63bdca24defba18eb7af7ffa5bf4",
+              },
+          }
+          for key, expected in expected_maps.items():
+              if report.get(key) != expected:
+                  raise SystemExit(f"campaign-03 evidence has invalid {key} map")
+
+          scaling_text = Path("docs/SCALING_EVIDENCE.md").read_text(encoding="utf-8")
+          digest_match = re.search(
+              r"The public JSON has SHA-256\s+`([0-9a-f]{64})`",
+              scaling_text,
+          )
+          expected_digest = manifest_digests["campaign-03-preparation-failure.json"]
+          if digest_match is None or digest_match.group(1) != expected_digest:
+              raise SystemExit("scaling evidence cites a stale public JSON digest")
+          private_digest_match = re.search(
+              r"canonical private archive manifest has SHA-256\s+`([0-9a-f]{64})`",
+              scaling_text,
+          )
+          expected_private_digest = report["private_archive_hashes"][
+              "campaign_manifest_sha256"
+          ]
+          if (
+              private_digest_match is None
+              or private_digest_match.group(1) != expected_private_digest
+          ):
+              raise SystemExit("scaling evidence cites a stale private archive digest")
+          print("public evidence manifest and status contract verify")
+          PY
       - name: Validate repository-local Markdown links
         run: |
           python - <<'PY'
@@ -187,7 +319,10 @@ jobs:
           expected_root = archives[0].name.removesuffix(".tar.gz")
 
           required = {
+              PurePosixPath("docs/evidence/SHA256SUMS"),
+              PurePosixPath("docs/evidence/campaign-03-preparation-failure.json"),
               PurePosixPath("validation/register_scaling_sweep.py"),
+              PurePosixPath("validation/remote_capacity_preflight.py"),
               PurePosixPath("validation/run_registered_scaling_sweep.py"),
               PurePosixPath("validation/scaling_sweep_v1.json"),
           }
@@ -214,7 +349,7 @@ jobs:
               )
               if invalid:
                   raise SystemExit(
-                      "source distribution must contain each required experiment file "
+                      "source distribution must contain each required experiment/evidence file "
                       f"exactly once as a regular file: {invalid}"
                   )
               mismatched = []
@@ -224,10 +359,10 @@ jobs:
                       mismatched.append(path)
               if mismatched:
                   raise SystemExit(
-                      "source distribution experiment files differ from the checkout: "
+                      "source distribution experiment/evidence files differ from the checkout: "
                       f"{mismatched}"
                   )
-          print("source distribution retains the immutable scaling experiment contract")
+          print("source distribution retains the scaling contract and cited evidence")
           PY
       - name: Verify wheel and source-distribution installs
         run: |

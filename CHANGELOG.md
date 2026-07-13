@@ -11,6 +11,13 @@ current repository state, not completed hardware or scaling acceptance.
 
 ### Added
 
+- Documented PETSc 3.25 mixed-precision MUMPS and MUMPS 5.9 adaptive BLR as
+  separate **NOT RUN** research candidates, with host-high-water evidence still
+  required for any at-most-50% memory claim.
+- Added a shell-independent `statvfs` disk-capacity preflight for use by the
+  next disposable-runner campaign. Campaign-03 **FAILED** before either canary,
+  registration, or a FEM solve; its evidence and verified provider cleanup
+  remain archived.
 - Clean-room Apache-2.0 project identity.
 - Canonical scattering-data contract with explicit receiver/source ordering.
 - Reference-only alignment, differential measurement, repeat-noise estimation,
@@ -91,6 +98,10 @@ current repository state, not completed hardware or scaling acceptance.
 - Small serial and two-rank p=3-to-p=1 p-multigrid correctness artifacts
   **PASSED** at `bee9e9d`; the registered 86k/471k absorption-shift sweep is
   **NOT RUN**. This does not alter the historical `c3c1ded` scaling evidence.
+- Campaign-03 remote preparation **FAILED** before source checkout on an
+  incompatible GNU `df` option combination. Attestation and bootstrap
+  **PASSED**; both canaries, registration, and every solver run are **NOT RUN**.
+  All attempt-owned provider resources and the ephemeral key were deleted.
 - Real POM/PLA VNA reconstruction is **BLOCKED** because no accepted raw
   measurement/control bundle has been supplied; no successful real-object image
   is claimed.

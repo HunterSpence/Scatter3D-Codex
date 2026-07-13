@@ -31,6 +31,82 @@ not replace the historical scaling artifacts above:
 | Serial pMG JSON | `fem-smoke-pmg-serial-p3-p1.json`; SHA-256 `b364be215ad0a42a5788aa471305a119f3eb3717afafef0709e37eb88f07d284` |
 | MPI2 pMG JSON | `fem-smoke-pmg-mpi2-p3-p1.json`; SHA-256 `f0a93d119de6b45f9a6093998c9216a556dfad64d8515e211657d1d5d44b3c61` |
 
+## Registered p-multigrid campaign preparation
+
+Campaign-03 attempted to prepare one disposable runner from exact green source
+`5393e4494a5f63bdca24defba18eb7af7ffa5bf4` (Actions run
+[`29222225396`](https://github.com/HunterSpence/Scatter3D-Codex/actions/runs/29222225396),
+**PASSED**). Cryptographic runner attestation and bootstrap **PASSED**. The
+preparation script then **FAILED** before source checkout because GNU `df`
+rejects combining `-P` with `--output=avail`.
+
+No project image was built, neither lifecycle nor wrong-DoF canary ran, no
+immutable registration was created, and no FEM process launched. Therefore all
+eight registered p-multigrid entries remain **NOT RUN**. This preparation
+failure is not a numerical result and supplies no scaling or memory evidence.
+
+The exact attempt-owned server, Primary IP, firewall, and ephemeral SSH key were
+deleted; controller state recorded repeated exact absence over the deletion
+window and an independent live inventory check **PASSED**. The public-safe
+evidence is
+[`campaign-03-preparation-failure.json`](evidence/campaign-03-preparation-failure.json).
+The public JSON has SHA-256
+`64119bcff1a784bb26e319fe47194087a274bde123d187ae8c2cd288824937d6`.
+Its canonical private archive manifest has SHA-256
+`77d6a44e09e0876500849c507122d3b7f926b285c235affc52f79013b6383e42`.
+Infrastructure identities and raw provider records remain private.
+
+The portable capacity helper added for the next campaign has no shell or `df`
+dependency. After cloning and detach-checking out the exact green commit, a
+future identity-bound control pack must supply the resolved campaign and
+Docker-root paths and preserve its JSON before image build or other
+disk-intensive work. The example assumes `$docker_root` was resolved from the
+live Docker runtime and `$PRIVATE_DIR` is a pre-created private evidence
+directory:
+
+```bash
+python3 validation/remote_capacity_preflight.py \
+  --path campaign=/opt \
+  --path docker="$docker_root" \
+  --minimum-free-bytes 107374182400 \
+  > "$PRIVATE_DIR/disk-capacity-contract.json"
+```
+
+That example is not campaign-03 evidence and has not yet passed the mandatory
+live runner canary.
+
+## Direct-solver memory candidates — NOT RUN
+
+Two upstream developments are credible candidates for a separately registered
+memory campaign, but neither is evidence for the current release:
+
+- [PETSc 3.25](https://petsc.org/release/changes/325/) adds MUMPS
+  `-pc_precision <single,double>` and an out-of-core temporary-directory
+  control. The [official PETSc 3.25.3 package
+  recipe](https://gitlab.com/petsc/petsc/-/raw/v3.25.3/config/BuildSystem/config/packages/MUMPS.py)
+  still pins MUMPS 5.8.2 and enables mixed precision only when the required
+  single- and double-precision MUMPS libraries are actually present.
+- [MUMPS 5.9.0](https://mumps-solver.org/index.php?page=dwnld) adds the
+  experimental adaptive-precision BLR control `ICNTL(40)` and a
+  single-precision factorization in a double-precision instance via
+  `ICNTL(47)`. Its manual describes up to seven custom formats; this project
+  does not infer a blanket IEEE-FP16 storage claim from that description.
+
+The pinned release runtime remains DOLFINx 0.10.0 with PETSc/petsc4py 3.24.0,
+so both candidates are **NOT RUN** here. Testing either path requires a new
+digest-pinned image, explicit build-feature and effective-option evidence,
+double-precision residual/output comparisons, and a new immutable campaign
+identity. Results from that runtime must not be spliced into the current pMG
+sweep.
+
+MUMPS `INFOG(21)` and `INFOG(22)` remain useful secondary diagnostics: the
+[MUMPS 5.9.0 manual](https://mumps-solver.org/doc/userguide_5.9.0.pdf) defines
+them as effective memory used during factorization, respectively the maximum
+and sum over processors. They are not total process or host high-water marks.
+The project's at-most-50% target therefore continues to require identical-
+problem cgroup-v2 `memory.peak` (or equivalent scheduler high-water) evidence
+for both converged solvers.
+
 The historical c3 scaling JSON files do not retain the command line, Git
 revision, dirty state, or image digest. The final server log archive retains `/usr/bin/time`'s verbatim
 `Command being timed` records. Those commands are reproduced below. Future JSON
@@ -156,8 +232,9 @@ The immutable experiment is
 `validation/register_scaling_sweep.py` must write its complete registration
 outside the clean source tree before the first solve.
 `validation/run_registered_scaling_sweep.py --run-id <registered-id>` executes
-one entry without clobbering prior evidence, allowing remaining unstarted run
-IDs to proceed after an interruption.
+one entry without clobbering prior evidence. A non-passing entry stops automatic
+execution; continuing with an unstarted ID requires an explicit reviewed finding
+that the completed failure was numerical and the evidence system remains safe.
 Each run records separate stdout/stderr, `fem-smoke.json`, `exit-code.json`, and
 `SHA256SUMS`; the executor binds the complete physical problem, exact DoFs,
 source, images, runtime, 28 GiB no-swap cgroup, host `memory.peak`, and the
