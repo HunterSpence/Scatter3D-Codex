@@ -175,6 +175,60 @@ jobs:
         run: |
           python -m pip install --disable-pip-version-check build==1.2.2.post1
           python -m build
+      - name: Verify source-distribution experiment contract
+        run: |
+          python - <<'PY'
+          from pathlib import Path, PurePosixPath
+          import tarfile
+
+          archives = list(Path("dist").glob("*.tar.gz"))
+          if len(archives) != 1:
+              raise SystemExit(f"expected exactly one source distribution, found {archives}")
+          expected_root = archives[0].name.removesuffix(".tar.gz")
+
+          required = {
+              PurePosixPath("validation/register_scaling_sweep.py"),
+              PurePosixPath("validation/run_registered_scaling_sweep.py"),
+              PurePosixPath("validation/scaling_sweep_v1.json"),
+          }
+          with tarfile.open(archives[0], "r:gz") as archive:
+              entries = {}
+              for member in archive.getmembers():
+                  path = PurePosixPath(member.name)
+                  if path.is_absolute() or ".." in path.parts:
+                      raise SystemExit(
+                          f"source distribution contains unsafe path: {member.name!r}"
+                      )
+                  if not path.parts or path.parts[0] != expected_root:
+                      raise SystemExit(
+                          "source distribution does not have exactly the expected root: "
+                          f"{member.name!r} versus {expected_root!r}"
+                      )
+                  if len(path.parts) > 1:
+                      relative = PurePosixPath(*path.parts[1:])
+                      entries.setdefault(relative, []).append(member)
+              invalid = sorted(
+                  path
+                  for path in required
+                  if len(entries.get(path, [])) != 1 or not entries[path][0].isfile()
+              )
+              if invalid:
+                  raise SystemExit(
+                      "source distribution must contain each required experiment file "
+                      f"exactly once as a regular file: {invalid}"
+                  )
+              mismatched = []
+              for path in sorted(required):
+                  archived = archive.extractfile(entries[path][0])
+                  if archived is None or archived.read() != Path(*path.parts).read_bytes():
+                      mismatched.append(path)
+              if mismatched:
+                  raise SystemExit(
+                      "source distribution experiment files differ from the checkout: "
+                      f"{mismatched}"
+                  )
+          print("source distribution retains the immutable scaling experiment contract")
+          PY
       - name: Verify wheel and source-distribution installs
         run: |
           set -euo pipefail

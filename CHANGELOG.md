@@ -61,6 +61,9 @@ current repository state, not completed hardware or scaling acceptance.
   operator, counter, cgroup, and exit-code evidence. Preflight and missing-artifact
   failures remain explicit. Docker cleanup is attempt-bound, refuses foreign name
   conflicts, and observes the full post-timeout window before claiming absence.
+- Included the immutable scaling-sweep JSON specification in source distributions
+  and added a package gate that rejects an sdist missing the registration script,
+  executor, or registered experiment contract.
 
 ### Security
 
